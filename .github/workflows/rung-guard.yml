@@ -1,0 +1,26 @@
+name: rung-guard
+# MVP0 single-writer enforcement (H4). The rung carrier is CI-owned. CI writes it via the
+# built-in GITHUB_TOKEN, which does NOT re-trigger workflows — so this guard only ever fires
+# on a human/PAT label add. Any such hand-set rung: label is reverted: the carrier has one
+# writer, and it is not a hand.
+on:
+  pull_request_target:    # runs from the BASE branch (trusted), not the PR head — a guard
+    types: [labeled]      # must not depend on the head containing the workflow
+permissions:
+  issues: write
+  pull-requests: write
+jobs:
+  guard:
+    if: startsWith(github.event.label.name, 'rung:')
+    runs-on: ubuntu-latest
+    steps:
+      - name: revert hand-set rung label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ github.event.label.name }}
+          ACTOR: ${{ github.event.sender.login }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          echo "Non-CI actor '$ACTOR' set '$LABEL' on PR #$PR — reverting (rung is CI-owned)."
+          gh api -X DELETE "repos/${{ github.repository }}/issues/$PR/labels/$LABEL"
+          echo "reverted."

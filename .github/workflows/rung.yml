@@ -1,0 +1,43 @@
+name: rung
+# The rung carrier is a PRODUCT of CI — never hand-set. `rung:compose` means the pack's
+# contribution actually validated: every check script parses, the registry is valid JSON, and
+# the check scripts THIS PR changed run clean. (Pack-scoped on purpose — we validate the pack's
+# own contribution, not the repo's pre-existing baseline reds.)
+on:
+  pull_request:
+    branches: [ main ]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+jobs:
+  rung:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: compose rung — validate the pack's contribution
+        run: |
+          set -e
+          echo "1) every check script must parse"
+          for s in tests3/checks/scripts/*.sh; do bash -n "$s"; done
+          echo "2) registry.json must be valid JSON"
+          python3 -c "import json; json.load(open('tests3/checks/registry.json'))"
+          echo "3) run the check scripts this PR changed — they must exit 0 on this repo"
+          base="${{ github.event.pull_request.base.sha }}"
+          changed=$(git diff --name-only "$base" HEAD -- 'tests3/checks/scripts/*.sh' || true)
+          if [ -z "$changed" ]; then echo "(no check scripts changed)"; fi
+          for s in $changed; do
+            [ -f "$s" ] || continue
+            echo "running changed check: $s"
+            chmod +x "$s"; bash "$s"
+          done
+      - name: stamp rung:compose (only reachable on green)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo '{"labels":["rung:compose"]}' \
+            | gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels --input -
+          echo "rung:compose stamped by CI on PR #${{ github.event.pull_request.number }}"
