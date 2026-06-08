@@ -622,6 +622,12 @@ class MeetingCreate(BaseModel):
         False,
         description="Use stored browser userdata for authenticated join. Requires prior browser_session setup."
     )
+    seed_pool_account: Optional[str] = Field(
+        None,
+        description="Operator-only (browser_session mode): seed a shared system-pool account by "
+                    "persisting this session's cookies to pool/<account>/browser-userdata instead "
+                    "of the per-user path. Used to log a Vexa pool account into Google once."
+    )
     # Workspace fields — used by browser_session mode for git workspace setup
     workspaceGitRepo: Optional[str] = Field(None, description="Git repo URL for workspace setup in browser_session mode")
     workspaceGitToken: Optional[str] = Field(None, description="Git token for workspace repo access")

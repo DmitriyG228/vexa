@@ -130,6 +130,11 @@ spec:
               value: {{ .Values.meetingApi.botPoolEnabled | default false | quote }}
             - name: BOT_POOL_ACCOUNTS
               value: {{ .Values.meetingApi.botPoolAccounts | default "" | quote }}
+            # When true, route Google Meet bots through the shared pool account even if the
+            # client didn't request authenticated mode (no client change needed). Instant
+            # rollback by setting back to false.
+            - name: BOT_POOL_FORCE
+              value: {{ .Values.meetingApi.botPoolForce | default false | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.meetingApi.logLevel | default "INFO" | quote }}
             {{- with .Values.meetingApi.extraEnv }}

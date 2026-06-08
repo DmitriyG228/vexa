@@ -835,10 +835,17 @@ async def request_bot(
         # (S3_*/AWS_* on s3 deployments like prod; MINIO_* on minio deployments). When nothing
         # is configured the session runs local-only (userdata lost on restart → can't seed).
         store = resolve_bot_object_storage()
+        # Operator pool-seeding: when seed_pool_account is set, persist this session to the
+        # SHARED pool path so the system-authenticated bots read the same cookies. Otherwise
+        # the legacy per-user workspace path (does not affect normal per-user sessions).
+        if getattr(req, "seed_pool_account", None):
+            seed_path = f"pool/{req.seed_pool_account}/browser-userdata"
+        else:
+            seed_path = f"users/{current_user.id}/browser-userdata"
         s3_config = {}
         if store.get("s3Endpoint") and store.get("s3Bucket"):
             s3_config = {
-                "userdataS3Path": f"users/{current_user.id}/browser-userdata",
+                "userdataS3Path": seed_path,
                 **store,
             }
 
@@ -1145,14 +1152,19 @@ async def request_bot(
         bot_config["showAvatar"] = False
     if meeting_data.get("capture_modes"):
         bot_config["captureModes"] = meeting_data["capture_modes"]
-    if req.authenticated:
+    # System-pool authentication. When the pool is enabled+forced, route Google Meet bots
+    # through the SHARED signed-in pool account even if the client didn't request it (clients
+    # never set authenticated=true). Env-gated (BOT_POOL_FORCE) → instant rollback.
+    pool_enabled = os.environ.get("BOT_POOL_ENABLED", "false").lower() == "true"
+    pool_force = os.environ.get("BOT_POOL_FORCE", "false").lower() == "true"
+    pool_accounts = [a.strip() for a in os.environ.get("BOT_POOL_ACCOUNTS", "").split(",") if a.strip()]
+    force_auth = pool_enabled and pool_force and bool(pool_accounts) and req.platform.value == "google_meet"
+    if req.authenticated or force_auth:
         store = resolve_bot_object_storage()
         bot_config["authenticated"] = True
-        # Vexa-managed pool mode: use a shared, read-only pool-account profile (seeded/refreshed
-        # centrally) instead of the per-user profile. The bot must not write it back on exit
-        # (sharedSession=True). When the pool is disabled we keep the legacy per-user profile.
-        pool_enabled = os.environ.get("BOT_POOL_ENABLED", "false").lower() == "true"
-        pool_accounts = [a.strip() for a in os.environ.get("BOT_POOL_ACCOUNTS", "").split(",") if a.strip()]
+        # Pool mode: use a shared, read-only pool-account profile (seeded/refreshed centrally)
+        # instead of the per-user profile; the bot must not write it back on exit
+        # (sharedSession). When the pool is disabled, fall back to the legacy per-user profile.
         if pool_enabled and pool_accounts:
             # Phase 1: single account (first in the list). Phase 2 replaces this with
             # least-recently-assigned lease selection from the BotPoolAccount registry.

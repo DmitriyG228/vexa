@@ -135,6 +135,8 @@ meetingApi:
   # slugs; Phase 1 uses the first. Default off → legacy per-user behaviour unchanged.
   botPoolEnabled: false
   botPoolAccounts: ""
+  # Force Google Meet bots through the shared pool account without a client change.
+  botPoolForce: false
   logLevel: "INFO"
   resources:
     requests:
