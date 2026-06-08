@@ -57,6 +57,42 @@ logger = logging.getLogger("meeting_api.meetings")
 router = APIRouter()
 
 
+def resolve_bot_object_storage() -> Dict[str, str]:
+    """Resolve object-storage config for the bot's browser-userdata sync — used by both
+    authenticated meeting bots and browser_session seeding.
+
+    Prefers the ACTIVE S3 backend (S3_*/AWS_*, the same store used for recordings) when
+    STORAGE_BACKEND=s3 or no MinIO endpoint is configured; otherwise falls back to MINIO_*
+    for minio-based deployments (compose/lite/self-host). Returns {} when nothing usable is
+    configured (the bot then runs userdata-local-only). Keys: s3Endpoint, s3Bucket,
+    s3AccessKey, s3SecretKey.
+    """
+    backend = (os.environ.get("STORAGE_BACKEND") or "minio").lower()
+    minio_endpoint = (os.environ.get("MINIO_ENDPOINT") or "").strip()
+    if backend == "s3" or not minio_endpoint:
+        endpoint = (os.environ.get("S3_ENDPOINT") or "").strip()
+        access = os.environ.get("AWS_ACCESS_KEY_ID", "")
+        secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+        if not (endpoint and access and secret):
+            return {}
+        if not endpoint.startswith(("http://", "https://")):
+            secure = (os.environ.get("S3_SECURE", "true").lower() == "true")
+            endpoint = ("https://" if secure else "http://") + endpoint
+        return {
+            "s3Endpoint": endpoint,
+            "s3Bucket": os.environ.get("S3_BUCKET", ""),
+            "s3AccessKey": access,
+            "s3SecretKey": secret,
+        }
+    minio_secure = os.environ.get("MINIO_SECURE", "false").lower() == "true"
+    return {
+        "s3Endpoint": f"{'https' if minio_secure else 'http'}://{minio_endpoint}",
+        "s3Bucket": os.environ.get("MINIO_BUCKET", "vexa-recordings"),
+        "s3AccessKey": os.environ.get("MINIO_ACCESS_KEY", ""),
+        "s3SecretKey": os.environ.get("MINIO_SECRET_KEY", ""),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Globals (set during startup)
 # ---------------------------------------------------------------------------
@@ -795,19 +831,15 @@ async def request_bot(
         await db.commit()
         await db.refresh(new_meeting)
 
-        # S3/MinIO config for browser data persistence.
-        # When MINIO_ENDPOINT is set, browser userdata syncs to S3 (survives restarts).
-        # When empty, userdata lives only in the container filesystem (local-only mode).
-        minio_endpoint = (os.environ.get("MINIO_ENDPOINT") or "").strip()
+        # Object-storage config for browser-userdata persistence. Uses the ACTIVE backend
+        # (S3_*/AWS_* on s3 deployments like prod; MINIO_* on minio deployments). When nothing
+        # is configured the session runs local-only (userdata lost on restart → can't seed).
+        store = resolve_bot_object_storage()
         s3_config = {}
-        if minio_endpoint:
-            minio_secure = os.environ.get("MINIO_SECURE", "false").lower() == "true"
+        if store.get("s3Endpoint") and store.get("s3Bucket"):
             s3_config = {
                 "userdataS3Path": f"users/{current_user.id}/browser-userdata",
-                "s3Endpoint": f"{'https' if minio_secure else 'http'}://{minio_endpoint}",
-                "s3Bucket": os.environ.get("MINIO_BUCKET", "vexa-recordings"),
-                "s3AccessKey": os.environ.get("MINIO_ACCESS_KEY", ""),
-                "s3SecretKey": os.environ.get("MINIO_SECRET_KEY", ""),
+                **store,
             }
 
         bot_config = {
@@ -1114,10 +1146,7 @@ async def request_bot(
     if meeting_data.get("capture_modes"):
         bot_config["captureModes"] = meeting_data["capture_modes"]
     if req.authenticated:
-        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
-        minio_secure = os.environ.get("MINIO_SECURE", "false").lower() == "true"
-        s3_endpoint_url = f"{'https' if minio_secure else 'http'}://{minio_endpoint}"
-        s3_bucket = os.environ.get("MINIO_BUCKET", "vexa-recordings")
+        store = resolve_bot_object_storage()
         bot_config["authenticated"] = True
         # Vexa-managed pool mode: use a shared, read-only pool-account profile (seeded/refreshed
         # centrally) instead of the per-user profile. The bot must not write it back on exit
@@ -1132,10 +1161,10 @@ async def request_bot(
             bot_config["sharedSession"] = True
         else:
             bot_config["userdataS3Path"] = f"users/{current_user.id}/browser-userdata"
-        bot_config["s3Endpoint"] = s3_endpoint_url
-        bot_config["s3Bucket"] = s3_bucket
-        bot_config["s3AccessKey"] = os.environ.get("MINIO_ACCESS_KEY", "")
-        bot_config["s3SecretKey"] = os.environ.get("MINIO_SECRET_KEY", "")
+        bot_config["s3Endpoint"] = store.get("s3Endpoint", "")
+        bot_config["s3Bucket"] = store.get("s3Bucket", "")
+        bot_config["s3AccessKey"] = store.get("s3AccessKey", "")
+        bot_config["s3SecretKey"] = store.get("s3SecretKey", "")
     # Remove None values
     bot_config = {k: v for k, v in bot_config.items() if v is not None}
 
