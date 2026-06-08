@@ -51,6 +51,11 @@ export type BotConfig = {
   s3Bucket?: string;
   s3AccessKey?: string;
   s3SecretKey?: string;
+  // Pool mode: the userdata profile is a SHARED, read-only pool-account session that is
+  // seeded/refreshed centrally. When true the bot must NOT write the profile back on exit
+  // (avoids concurrent bots clobbering the shared session). Legacy per-user mode leaves this
+  // unset (read-write).
+  sharedSession?: boolean;
 }
 
 export type BrowserSessionConfig = {

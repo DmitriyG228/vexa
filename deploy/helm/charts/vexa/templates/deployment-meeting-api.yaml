@@ -123,6 +123,13 @@ spec:
             # external IP, OR when an ingress fronts MinIO under an FQDN.
             - name: MINIO_PUBLIC_ENDPOINT
               value: {{ .Values.meetingApi.minioPublicEndpoint | default "" | quote }}
+            # Vexa-managed authenticated bot pool (Phase 1). When enabled, authenticated bots
+            # use a shared read-only pool-account profile (pool/<account>/browser-userdata)
+            # instead of a per-user profile. Reuses the MINIO_* config above.
+            - name: BOT_POOL_ENABLED
+              value: {{ .Values.meetingApi.botPoolEnabled | default false | quote }}
+            - name: BOT_POOL_ACCOUNTS
+              value: {{ .Values.meetingApi.botPoolAccounts | default "" | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.meetingApi.logLevel | default "INFO" | quote }}
             {{- with .Values.meetingApi.extraEnv }}

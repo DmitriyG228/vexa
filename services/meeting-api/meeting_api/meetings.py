@@ -1119,7 +1119,19 @@ async def request_bot(
         s3_endpoint_url = f"{'https' if minio_secure else 'http'}://{minio_endpoint}"
         s3_bucket = os.environ.get("MINIO_BUCKET", "vexa-recordings")
         bot_config["authenticated"] = True
-        bot_config["userdataS3Path"] = f"users/{current_user.id}/browser-userdata"
+        # Vexa-managed pool mode: use a shared, read-only pool-account profile (seeded/refreshed
+        # centrally) instead of the per-user profile. The bot must not write it back on exit
+        # (sharedSession=True). When the pool is disabled we keep the legacy per-user profile.
+        pool_enabled = os.environ.get("BOT_POOL_ENABLED", "false").lower() == "true"
+        pool_accounts = [a.strip() for a in os.environ.get("BOT_POOL_ACCOUNTS", "").split(",") if a.strip()]
+        if pool_enabled and pool_accounts:
+            # Phase 1: single account (first in the list). Phase 2 replaces this with
+            # least-recently-assigned lease selection from the BotPoolAccount registry.
+            account = pool_accounts[0]
+            bot_config["userdataS3Path"] = f"pool/{account}/browser-userdata"
+            bot_config["sharedSession"] = True
+        else:
+            bot_config["userdataS3Path"] = f"users/{current_user.id}/browser-userdata"
         bot_config["s3Endpoint"] = s3_endpoint_url
         bot_config["s3Bucket"] = s3_bucket
         bot_config["s3AccessKey"] = os.environ.get("MINIO_ACCESS_KEY", "")

@@ -809,8 +809,10 @@ async function performGracefulLeave(
     }
   }
 
-  // Sync browser data back to S3 for authenticated bots (preserves cookies/sessions)
-  if (currentBotConfig?.authenticated && currentBotConfig?.userdataS3Path) {
+  // Sync browser data back to S3 for authenticated bots (preserves cookies/sessions).
+  // Pool mode (sharedSession) uses a shared, read-only pool-account profile refreshed
+  // centrally — never write it back here, or concurrent bots would clobber the session.
+  if (currentBotConfig?.authenticated && currentBotConfig?.userdataS3Path && !currentBotConfig?.sharedSession) {
     try {
       log("[Graceful Leave] Syncing browser data to S3 (authenticated bot)...");
       syncBrowserDataToS3(currentBotConfig);

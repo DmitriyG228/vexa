@@ -128,6 +128,13 @@ meetingApi:
   # ClusterIP-only — typical value: `http://<lke-node-ip>:<minio.service.nodePort>`
   # OR `https://minio.<your-domain>` when fronted by an ingress.
   minioPublicEndpoint: ""
+  # Vexa-managed authenticated bot pool (Phase 1). When botPoolEnabled=true, authenticated
+  # Google Meet bots use a SHARED, read-only pool-account browser profile at
+  # pool/<account>/browser-userdata in MinIO (seeded/refreshed centrally) instead of a
+  # per-user profile, and never write it back on exit. botPoolAccounts is a CSV of account
+  # slugs; Phase 1 uses the first. Default off → legacy per-user behaviour unchanged.
+  botPoolEnabled: false
+  botPoolAccounts: ""
   logLevel: "INFO"
   resources:
     requests:
