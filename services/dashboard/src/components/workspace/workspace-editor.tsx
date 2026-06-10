@@ -13,6 +13,9 @@ import { useAuthStore } from "@/stores/auth-store";
 import { MarkdownEditor } from "./markdown-editor";
 
 const AGENT_API = "/api/agent";
+// Org knowledge workspace (EI) — read-only viewer; edits go through Proposals.
+const WS_API = "/api/workspace-ei";
+const READ_ONLY = true;
 
 interface FileNode {
   name: string;
@@ -118,7 +121,7 @@ export function WorkspaceEditor() {
 
   const loadTree = useCallback(async () => {
     try {
-      const resp = await fetch(`${AGENT_API}/workspace/tree?user_id=${userId}`);
+      const resp = await fetch(`${WS_API}/tree`);
       if (!resp.ok) return;
       const data = await resp.json();
       const files: string[] = data.files || [];
@@ -127,6 +130,7 @@ export function WorkspaceEditor() {
   }, [userId]);
 
   const loadDiff = useCallback(async () => {
+    if (READ_ONLY) { setChangedCount(0); return; }
     try {
       const resp = await fetch(`${AGENT_API}/workspace/diff?user_id=${userId}`);
       if (!resp.ok) return;
@@ -147,7 +151,7 @@ export function WorkspaceEditor() {
     setIsLoading(true);
     setSelectedFile(path);
     try {
-      const resp = await fetch(`${AGENT_API}/workspace/file?user_id=${userId}&path=${encodeURIComponent(path)}`);
+      const resp = await fetch(`${WS_API}/file?path=${encodeURIComponent(path)}`);
       if (!resp.ok) throw new Error("Failed to load file");
       const data = await resp.json();
       setContent(data.content || "");
@@ -238,9 +242,11 @@ export function WorkspaceEditor() {
             <span className="text-xs font-medium">Workspace</span>
           </div>
           <div className="flex gap-0.5">
+            {!READ_ONLY && (
             <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => setShowNewFile(true)}>
               <FilePlus className="h-3.5 w-3.5" />
             </Button>
+            )}
             <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={loadTree}>
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
@@ -277,6 +283,11 @@ export function WorkspaceEditor() {
         </div>
 
         {/* Git panel */}
+        {READ_ONLY ? (
+          <div className="border-t p-2 text-xs text-muted-foreground">
+            Read-only — changes arrive via approved Proposals
+          </div>
+        ) : (
         <div className="border-t p-2 space-y-1">
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <GitCommit className="h-3 w-3" />
@@ -302,6 +313,7 @@ export function WorkspaceEditor() {
             </div>
           )}
         </div>
+        )}
       </div>
 
       {/* Editor pane */}
@@ -313,8 +325,9 @@ export function WorkspaceEditor() {
               <div className="flex items-center gap-2 min-w-0">
                 <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-sm font-mono truncate">{selectedFile}</span>
-                {isDirty && <Badge variant="secondary" className="text-xs">Modified</Badge>}
+                {!READ_ONLY && isDirty && <Badge variant="secondary" className="text-xs">Modified</Badge>}
               </div>
+              {!READ_ONLY && (
               <Button
                 size="sm"
                 onClick={saveFile}
@@ -324,6 +337,7 @@ export function WorkspaceEditor() {
                 {isSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
                 Save
               </Button>
+              )}
             </div>
 
             {/* Editor */}
@@ -333,10 +347,11 @@ export function WorkspaceEditor() {
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                 </div>
               ) : isMarkdown ? (
-                <MarkdownEditor content={content} onChange={setContent} />
+                <MarkdownEditor content={content} onChange={setContent} editable={!READ_ONLY} />
               ) : (
                 <textarea
                   value={content}
+                  readOnly={READ_ONLY}
                   onChange={(e) => setContent(e.target.value)}
                   className="w-full h-full p-4 font-mono text-sm bg-background resize-none focus:outline-none"
                   spellCheck={false}
@@ -348,8 +363,8 @@ export function WorkspaceEditor() {
           <div className="flex items-center justify-center h-full text-muted-foreground">
             <div className="text-center">
               <FolderOpen className="h-10 w-10 mx-auto mb-2" />
-              <p className="text-sm">Select a file to edit</p>
-              <p className="text-xs mt-1">Or create a new file with the + button</p>
+              <p className="text-sm">Select a file to read</p>
+              <p className="text-xs mt-1">The agent updates this workspace via approved Proposals</p>
             </div>
           </div>
         )}

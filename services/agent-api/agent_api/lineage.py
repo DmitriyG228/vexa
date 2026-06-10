@@ -701,6 +701,36 @@ async def reject_proposal(pid: str, body: RejectRequest, org: Optional[str] = Qu
     return {"closed": True}
 
 
+# ── Org workspace read API (workspace viewer — read-only) ──────────────────
+
+
+@router.get("/api/ei/workspace/tree", dependencies=[Depends(require_api_key)])
+async def ei_workspace_tree(org: str = Query(...)):
+    """List all files on the org workspace main branch (read-only viewer)."""
+    org = sanitize_org_id(org)
+    repo = org_repo_path(org)
+    if not os.path.isdir(repo):
+        return {"org_id": org, "files": []}
+    out = await _git(["ls-tree", "-r", "--name-only", "main"], cwd=repo)
+    return {"org_id": org, "files": [p for p in out.splitlines() if p]}
+
+
+@router.get("/api/ei/workspace/file", dependencies=[Depends(require_api_key)])
+async def ei_workspace_file(org: str = Query(...), path: str = Query(...)):
+    """Read one file from the org workspace main branch (read-only viewer)."""
+    org = sanitize_org_id(org)
+    repo = org_repo_path(org)
+    if path.startswith("/") or ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail="invalid path")
+    if not os.path.isdir(repo):
+        raise HTTPException(status_code=404, detail="workspace not found")
+    try:
+        content = await _git(["show", f"main:{path}"], cwd=repo)
+    except RuntimeError:
+        raise HTTPException(status_code=404, detail="file not found")
+    return {"org_id": org, "path": path, "content": content}
+
+
 # ── Internal status (visible run state — ops + regression checks) ──────────
 
 
