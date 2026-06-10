@@ -35,6 +35,7 @@ from agent_api.chat import (
     save_session_meta,
 )
 from agent_api.container_manager import ContainerManager
+from agent_api import lineage
 from agent_api import workspace
 
 logging.basicConfig(
@@ -61,6 +62,9 @@ app.add_middleware(
 )
 
 cm = ContainerManager()
+
+# Enterprise-Intelligence lineage: sign API (frozen contract v1) + run status.
+app.include_router(lineage.router)
 
 
 # ── Request / response models ──────────────────────────────────────────────
@@ -127,6 +131,9 @@ async def startup():
     logger.info("Redis connected")
 
     await cm.startup()
+
+    # EI lineage shares the app's Redis client + container manager.
+    lineage.configure(app.state.redis, cm)
 
     # Migrate legacy S3 workspace paths (workspaces/{uid}/ → workspaces/{uid}/default/)
     try:
@@ -489,13 +496,21 @@ async def workspace_save(req: UserIdRequest):
 
 @app.post("/internal/webhooks/meeting-completed")
 async def webhook_meeting_completed(request: Request):
-    """Receive post-meeting webhook from meeting-api."""
+    """Consume a meeting.completed envelope from meeting-api's POST_MEETING_HOOKS.
+
+    Pack ei-lineage (#24): claims the meeting (duplicate-delivery-safe), then
+    kicks off the proposal pipeline in the background — workspace ensure →
+    org agent container → agent run → proposal branch meeting/<id>.
+    Responds fast so the hook delivery (10s timeout) never blocks on the run.
+    Org-level enable flag default OFF: without it, this endpoint is inert.
+    """
     body = await request.json()
     event_type = body.get("event_type", "unknown")
     event_id = body.get("event_id", "?")
     meeting_id = body.get("data", {}).get("meeting", {}).get("id", "?")
     logger.info(f"[Webhook] Received {event_type} event_id={event_id} meeting={meeting_id}")
-    return {"status": "received", "event_id": event_id}
+    result = await lineage.handle_meeting_completed(body)
+    return {"event_id": event_id, **result}
 
 
 @app.get("/internal/workspace/status")

@@ -53,3 +53,16 @@ AGENT_STREAM_FORMAT = os.getenv("AGENT_STREAM_FORMAT", "stream-json")
 
 # CORS
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+
+# ── Enterprise-Intelligence lineage (pack ei-lineage, issue #24) ───────────
+# Transcript source — meeting-api serves the collector's internal endpoint.
+TRANSCRIPTION_COLLECTOR_URL = os.getenv("TRANSCRIPTION_COLLECTOR_URL", "http://meeting-api:8080")
+# Org knowledge workspaces (git repos) live on a volume, one dir per org.
+EI_WORKSPACES_PATH = os.getenv("EI_WORKSPACES_PATH", "/workspaces")
+# Seed template baked into the image (synthetic content only).
+EI_WORKSPACE_SEED_PATH = os.getenv("EI_WORKSPACE_SEED_PATH", "/app/workspace-seed")
+# Optional full agent command override (provider via env only — no hardcoding).
+# When empty, the command is built from AGENT_CLI/AGENT_ALLOWED_TOOLS/DEFAULT_MODEL.
+EI_AGENT_CMD = os.getenv("EI_AGENT_CMD", "")
+# Wall-clock budget for one proposal agent run (seconds).
+EI_AGENT_TIMEOUT = int(os.getenv("EI_AGENT_TIMEOUT", "900"))

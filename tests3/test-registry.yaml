@@ -49,6 +49,26 @@ tests:
     max_duration_sec: 120
 
   # ── Test scripts — retrofitted with step_* in Phase A ───────────
+  # ei-lineage (#24): meeting.completed → agent proposal → human-signed merge.
+  # Compose-only: agent-api + runtime-api org agent containers are a compose
+  # profile concern (lite/helm packaging is a follow-on pack). Deterministic —
+  # the agent step uses a per-org deterministic command through the full real
+  # lineage (no LLM credentials needed at this tier).
+  ei-lineage:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/ei-lineage.sh
+    features: [enterprise-intelligence]
+    max_duration_sec: 900
+    steps:
+      - hook_wired         # POST_MEETING_HOOKS targets agent-api's consumer
+      - e2e_propose        # synthetic completed meeting → conforming proposal branch
+      - idempotent         # duplicate deliveries → exactly one proposal (proves #3)
+      - sign_gate          # main moves only via /sign; reject closes branch (proves #2)
+      - crash_safe         # induced failure → no partial branch; clean retry (proves #4)
+      - tenant_isolated    # two orgs → two workspaces; cross-org 404 (proves #5)
+      - flag_off_inert     # org flag default OFF → fully inert (proves #6)
+
   webhooks:
     tier: cheap
     runs_in: [lite, compose, helm]

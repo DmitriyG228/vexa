@@ -65,9 +65,6 @@ MINIO_SECURE=false
 CLAUDE_CREDENTIALS_PATH=
 CLAUDE_JSON_PATH=
 
-# Billing hooks (optional — for hosted service)
-# POST_MEETING_HOOKS=https://your-billing-webhook
-
 # API-gateway rate limits (requests/min per key). 0 disables.
 # Keep these generous for dev/self-host — the dashboard polls transcripts/chat
 # every few seconds, so low values (e.g. 6) make it return 429 "Rate limit
@@ -75,3 +72,17 @@ CLAUDE_JSON_PATH=
 RATE_LIMIT_RPM=600
 RATE_LIMIT_ADMIN_RPM=120
 RATE_LIMIT_WS_RPM=120
+
+# Enterprise Intelligence (ei-lineage #24) — agent provider/model via env ONLY.
+# The org agent containers default to the in-repo vexa-agent image; override
+# image or agent command for other providers/CLIs. Per-org settings live in
+# user.data.ei (enabled flag — default OFF, org_id, agent_cli, model, env).
+# AGENT_IMAGE=vexaai/vexa-agent:latest
+# ANTHROPIC_API_KEY=
+# EI_AGENT_CMD=
+# EI_AGENT_TIMEOUT=900
+
+# Post-meeting hooks (comma-separated). Default (set in docker-compose.yml)
+# points at agent-api's meeting.completed consumer; append your own targets
+# (e.g. billing) here if needed.
+# POST_MEETING_HOOKS=http://agent-api:8100/internal/webhooks/meeting-completed,https://your-billing-webhook
