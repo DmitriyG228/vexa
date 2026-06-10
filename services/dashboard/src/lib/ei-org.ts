@@ -28,10 +28,15 @@ export type EiOrgResult =
  * - EI enabled -> the sanitized org id
  */
 export async function getAuthenticatedEiOrg(): Promise<EiOrgResult> {
+  // Admin routes require VEXA_ADMIN_API_URL explicitly (never borrowed from
+  // the gateway URL) — see tests3 DASHBOARD_ADMIN_URL_EXPLICIT_SSOT.
   const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL;
   const VEXA_ADMIN_API_KEY = process.env.VEXA_ADMIN_API_KEY || "";
+  if (!VEXA_ADMIN_API_URL || !VEXA_ADMIN_API_KEY) {
+    return { status: "unauthenticated" };
+  }
   const VEXA_API_URL = process.env.VEXA_API_URL;
-  if (!VEXA_ADMIN_API_URL || !VEXA_ADMIN_API_KEY || !VEXA_API_URL) {
+  if (!VEXA_API_URL) {
     return { status: "unauthenticated" };
   }
 
