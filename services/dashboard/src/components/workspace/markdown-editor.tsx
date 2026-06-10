@@ -13,6 +13,7 @@ import {
 interface MarkdownEditorProps {
   content: string;
   onChange: (content: string) => void;
+  editable?: boolean;
 }
 
 // Convert markdown to HTML for TipTap (basic conversion)
@@ -118,11 +119,12 @@ function ToolbarButton({
   );
 }
 
-export function MarkdownEditor({ content, onChange }: MarkdownEditorProps) {
+export function MarkdownEditor({ content, onChange, editable = true }: MarkdownEditorProps) {
   const isInternalUpdate = useRef(false);
 
   const editor = useEditor({
     immediatelyRender: false,
+    editable,
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
