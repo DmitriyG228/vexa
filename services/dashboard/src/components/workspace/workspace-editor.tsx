@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -104,6 +105,7 @@ function FileTreeNode({
 }
 
 export function WorkspaceEditor() {
+  const searchParams = useSearchParams();
   const { user } = useAuthStore();
   const userId = user?.id?.toString() || user?.email || "default";
 
@@ -146,6 +148,13 @@ export function WorkspaceEditor() {
     loadTree();
     loadDiff();
   }, [loadTree, loadDiff]);
+
+  // Deep link: /workspace?file=<path> opens that file (used by chat wikilinks).
+  useEffect(() => {
+    const f = searchParams.get("file");
+    if (f) loadFile(f);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const loadFile = useCallback(async (path: string) => {
     setIsLoading(true);
