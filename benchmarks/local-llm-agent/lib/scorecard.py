@@ -25,6 +25,13 @@ PRICES = {
     "mistral-medium-latest": (0.40, 2.00),
 }
 
+# Superseded baseline rows kept in runs/ for traceability; labelled in the tables.
+HISTORICAL = {(1, "claude-sonnet-4-5")}
+
+
+def display(arm, model):
+    return f"{model} (historical)" if (arm, model) in HISTORICAL else model
+
 
 def fmt(v, suffix="", nd=2):
     if v is None:
@@ -84,7 +91,7 @@ def tables(latest):
             note = rec.get("notes") or ""
             blocked = note.startswith("BLOCKED")
             out.append(
-                f"| {arm} | {rec['cli']} | {model} | {task.upper()} | "
+                f"| {arm} | {rec['cli']} | {display(arm, model)} | {task.upper()} | "
                 f"{'**blocked**' if blocked else fmt(primary_score(rec))} | {detail or note} | "
                 f"{'—' if blocked else ('yes' if rec['completed'] else 'no')} | "
                 f"{fmt(rec['wall_clock_s'], 's', 1)} | {tok} | {fmt(cost_of(rec), '', 4)} |")
@@ -102,7 +109,7 @@ def tables(latest):
             rate = None
             if calls:
                 rate = (calls - (errs or 0)) / calls
-            out.append(f"| {arm} | {model} | {task.upper()} | {fmt(m.get('turns'))} | "
+            out.append(f"| {arm} | {display(arm, model)} | {task.upper()} | {fmt(m.get('turns'))} | "
                        f"{fmt(calls)} | {fmt(errs)} | {fmt(rate)} |")
     out.append("")
     return "\n".join(out)

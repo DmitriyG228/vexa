@@ -17,7 +17,7 @@ cd "$(dirname "$0")"
 
 ARM="${ARM:?set ARM=1|2|3|4}"
 case "$ARM" in
-  1) MODEL="${MODEL:-claude-sonnet-4-5}" ;;
+  1) MODEL="${MODEL:-claude-opus-4-8}" ;;
   *) MODEL="${MODEL:-mistral-small-latest}" ;;
 esac
 TASKS="${TASKS:-t1,t2,t3}"

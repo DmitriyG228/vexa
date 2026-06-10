@@ -6,7 +6,7 @@ matrix from the pack scope. Scorecard: [`docs/benchmarks/local-llm-agent.md`](..
 
 | Arm | CLI | Model | Route |
 |---|---|---|---|
-| 1 | Claude Code | Claude (baseline) | host credentials (`ANTHROPIC_API_KEY` or host `claude` login) |
+| 1 | Claude Code | claude-opus-4-8 / claude-sonnet-4-6 (baseline) | host credentials (`ANTHROPIC_API_KEY` or host `claude` login) |
 | 2 | Claude Code | Mistral | containerized Claude Code (own `CLAUDE_CONFIG_DIR`) → local **LiteLLM** container exposing the Anthropic `/v1/messages` route → Mistral La Plateforme |
 | 3 | Mistral Vibe | Mistral | direct API, default config |
 | 4 | OpenCode | Mistral | direct API (OpenAI-compatible), default config |
@@ -24,7 +24,7 @@ ARM=<1-4> MODEL=<id> benchmarks/local-llm-agent/run.sh        # full T1+T2+T3 su
 ARM=2 MODEL=mistral-small-latest TASKS=t1 benchmarks/local-llm-agent/run.sh
 ```
 
-Defaults: `MODEL=mistral-small-latest` (arms 2–4), `MODEL=claude-sonnet-4-5` (arm 1),
+Defaults: `MODEL=mistral-small-latest` (arms 2–4), `MODEL=claude-opus-4-8` (arm 1),
 `TASKS=t1,t2,t3`. Results append to `runs/arm<N>-<model>.jsonl` (one machine-readable
 record per arm × model × task: scores, tool-loop metrics, tokens, wall-clock). Regenerate
 the scorecard tables with `python3 lib/scorecard.py --write`.
