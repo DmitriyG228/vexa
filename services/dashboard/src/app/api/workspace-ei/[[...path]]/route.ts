@@ -50,6 +50,16 @@ export async function GET(req: NextRequest, ctx: Ctx): Promise<Response> {
     headers: AGENT_API_TOKEN ? { "X-API-Key": AGENT_API_TOKEN } : {},
     cache: "no-store",
   });
+  if (leaf === "chat/stream") {
+    return new Response(resp.body, {
+      status: resp.status,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
   const text = await resp.text();
   try {
     return Response.json(JSON.parse(text), { status: resp.status });
@@ -71,7 +81,7 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
   }
   const { path = [] } = await ctx.params;
   const leaf = path.join("/");
-  if (leaf !== "chat" && leaf !== "sessions/rename") {
+  if (leaf !== "chat" && leaf !== "chat/stream" && leaf !== "sessions/rename") {
     return Response.json({ detail: "Not found" }, { status: 404 });
   }
   let body: { message?: string; session_id?: string; title?: string };
@@ -82,12 +92,12 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
   }
   let target: URL;
   let payload: Record<string, unknown>;
-  if (leaf === "chat") {
+  if (leaf === "chat" || leaf === "chat/stream") {
     const message = (body.message || "").trim();
     if (!message) {
       return Response.json({ detail: "message required" }, { status: 400 });
     }
-    target = new URL(`${AGENT_API_URL}/api/ei/chat`);
+    target = new URL(`${AGENT_API_URL}/api/ei/${leaf === "chat/stream" ? "chat/stream" : "chat"}`);
     // user_id resolved server-side from the session — never client-supplied
     payload = { message, user_id: auth.userId, session_id: body.session_id || null };
   } else {

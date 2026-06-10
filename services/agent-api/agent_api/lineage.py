@@ -50,6 +50,7 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent_api import config
@@ -902,6 +903,207 @@ async def ei_chat(body: ChatRequest, org: str = Query(...)):
                 await _dexec(container, ["rm", "-rf", container_run_root], timeout=30)
             except Exception:
                 pass
+
+
+def _sse(obj: dict) -> str:
+    return f"data: {json.dumps(obj)}\n\n"
+
+
+def _streaming_agent_cmd(ei: dict) -> str:
+    cmd = _agent_command(ei)
+    if "--output streaming" in cmd:
+        return cmd
+    if "--output json" in cmd:
+        return cmd.replace("--output json", "--output streaming")
+    if cmd.rstrip().endswith("-p"):
+        return cmd.rstrip()[:-2] + "--output streaming -p"
+    return cmd
+
+
+def _vibe_event(line: str) -> Optional[dict]:
+    """Map one NDJSON line from the agent CLI to a UI event."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        m = json.loads(line)
+    except Exception:
+        return {"type": "log", "text": line[:200]}
+    if not isinstance(m, dict):
+        return None
+    role = m.get("role")
+    if m.get("tool_calls"):
+        calls = []
+        for tc in m["tool_calls"]:
+            fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+            name = fn.get("name") or tc.get("name") or "tool"
+            args = fn.get("arguments") or ""
+            if not isinstance(args, str):
+                args = json.dumps(args)
+            calls.append({"name": name, "args": args[:160]})
+        return {"type": "tools", "calls": calls}
+    if role == "tool":
+        c = m.get("content")
+        if isinstance(c, list):
+            c = " ".join(b.get("text", "") for b in c if isinstance(b, dict))
+        return {"type": "tool_result", "snippet": str(c or "")[:160]}
+    if role == "assistant":
+        c = m.get("content")
+        if isinstance(c, list):
+            c = "\n".join(b.get("text", "") for b in c if isinstance(b, dict))
+        if c and str(c).strip():
+            return {"type": "assistant", "text": str(c)}
+    return None
+
+
+@router.post("/api/ei/chat/stream", dependencies=[Depends(require_api_key)])
+async def ei_chat_stream(body: ChatRequest, org: str = Query(...)):
+    """Streaming variant of /api/ei/chat: SSE of agent activity (tool calls,
+    intermediate messages) followed by a final `done` event with the reply
+    and commit info. Same workspace/auto-commit semantics."""
+    org_s = sanitize_org_id(org)
+    ei = await resolve_ei_config(body.user_id) if body.user_id else None
+    if not ei or sanitize_org_id(ei.get("org_id") or "") != org_s:
+        raise HTTPException(status_code=404, detail="EI not enabled for this org/user")
+
+    session_id = re.sub(r"[^a-zA-Z0-9_-]", "", body.session_id or "") or \
+        f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+    chat_rel = f"chats/{session_id}.md"
+    run_id = f"chat-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+    run_dir = os.path.join(_runs_dir(org_s), run_id)
+    container_run_root = f"/tmp/ei-chat-{org_s}-{run_id}"
+
+    async def gen():
+        container = None
+        touch_task = None
+        proc = None
+        try:
+            yield _sse({"type": "status", "text": "preparing workspace"})
+            repo = await ensure_workspace(org_s)
+            os.makedirs(run_dir, exist_ok=True)
+            async with _org_lock(org_s):
+                await _git(["clone", "--branch", "main", "--single-branch", repo,
+                            os.path.join(run_dir, "repo")])
+            history = ""
+            hist_path = os.path.join(run_dir, "repo", chat_rel)
+            if os.path.isfile(hist_path):
+                with open(hist_path) as f:
+                    history = f.read()[-6000:]
+
+            org_env = ei.get("env") or {}
+            container = await _cm.ensure_container(
+                f"ei-{org_s}", session_id="ei",
+                config={"env": org_env} if org_env else {},
+            )
+            payload = _tar_dir(run_dir)
+            rc, out = await _dexec(
+                container,
+                ["sh", "-c",
+                 f"rm -rf {container_run_root} && mkdir -p {container_run_root} "
+                 f"&& tar -xz -C {container_run_root}"],
+                stdin=payload, timeout=120,
+            )
+            if rc != 0:
+                raise RuntimeError("workspace transfer failed")
+
+            prompt = _build_chat_prompt(body.message, history)
+            agent_cmd = _streaming_agent_cmd(ei)
+            shell_cmd = (
+                f"cd {container_run_root}/repo && EI_ORG_ID={shlex.quote(org_s)} "
+                f"{agent_cmd} {shlex.quote(prompt)}"
+            )
+            yield _sse({"type": "status", "text": "agent running"})
+            touch_task = asyncio.create_task(_touch_loop(container))
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "exec", container, "bash", "-c", shell_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            deadline = time.monotonic() + config.EI_AGENT_TIMEOUT
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    proc.kill()
+                    raise RuntimeError("agent run timed out")
+                try:
+                    line = await asyncio.wait_for(proc.stdout.readline(),
+                                                  timeout=min(remaining, 30))
+                except asyncio.TimeoutError:
+                    yield _sse({"type": "ping"})
+                    continue
+                if not line:
+                    break
+                ev = _vibe_event(line.decode(errors="replace"))
+                if ev:
+                    yield _sse(ev)
+            rc = await proc.wait()
+            touch_task.cancel()
+            touch_task = None
+            if rc != 0:
+                raise RuntimeError(f"agent run failed (rc={rc})")
+
+            rc, data = await _dexec(container,
+                                    ["tar", "-cz", "-C", container_run_root, "repo"],
+                                    timeout=120)
+            if rc != 0:
+                raise RuntimeError("workspace retrieval failed")
+            out_dir = os.path.join(run_dir, "out")
+            _untar_to(data, out_dir)
+            out_repo = os.path.join(out_dir, "repo")
+
+            reply_path = os.path.join(out_repo, ".ei", "reply.md")
+            reply = ""
+            if os.path.isfile(reply_path):
+                with open(reply_path) as f:
+                    reply = f.read().strip()
+            await _run(["rm", "-rf", os.path.join(out_repo, ".ei")])
+            if not reply:
+                reply = "(the agent returned no reply)"
+
+            now = _now()
+            chat_abs = os.path.join(out_repo, chat_rel)
+            os.makedirs(os.path.dirname(chat_abs), exist_ok=True)
+            new_file = not os.path.isfile(chat_abs)
+            with open(chat_abs, "a") as f:
+                if new_file:
+                    title = " ".join(body.message.split())[:48] or f"Chat {session_id}"
+                    f.write(f"# {title}\n<!-- ei-chat v1 id:{session_id} -->\n")
+                f.write(f"\n## You — {now}\n\n{body.message.strip()}\n")
+                f.write(f"\n## Agent — {now}\n\n{reply.strip()}\n")
+
+            await _git(["add", "-A"], cwd=out_repo)
+            changed = await _git(["diff", "--cached", "--name-status"], cwd=out_repo)
+            commit_sha = None
+            files = [ln for ln in changed.splitlines() if ln.strip()]
+            kb_files = [ln for ln in files if chat_rel not in ln]
+            if files:
+                snippet = " ".join(body.message.split())[:60]
+                await _git(["commit", "-m", f"chat: {snippet}"], cwd=out_repo)
+                async with _org_lock(org_s):
+                    await _git(["fetch", out_repo, "main"], cwd=repo)
+                    await _git(["merge", "--ff-only", "FETCH_HEAD"], cwd=repo)
+                    commit_sha = await _git(["rev-parse", "HEAD"], cwd=repo)
+
+            yield _sse({"type": "done", "reply": reply, "commit": commit_sha,
+                        "files_changed": len(kb_files), "session_id": session_id})
+        except Exception as e:
+            logger.error(f"EI chat stream failed org={org_s}: {e}", exc_info=True)
+            yield _sse({"type": "error", "message": str(e)[:300]})
+        finally:
+            if touch_task:
+                touch_task.cancel()
+            if proc and proc.returncode is None:
+                proc.kill()
+            await _run(["rm", "-rf", run_dir])
+            if container:
+                try:
+                    await _dexec(container, ["rm", "-rf", container_run_root], timeout=30)
+                except Exception:
+                    pass
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 
 class RenameChatRequest(BaseModel):
