@@ -873,7 +873,8 @@ async def ei_chat(body: ChatRequest, org: str = Query(...)):
         new_file = not os.path.isfile(chat_abs)
         with open(chat_abs, "a") as f:
             if new_file:
-                f.write(f"# Chat {session_id}\n<!-- ei-chat v1 -->\n")
+                title = " ".join(body.message.split())[:48] or f"Chat {session_id}"
+                f.write(f"# {title}\n<!-- ei-chat v1 id:{session_id} -->\n")
             f.write(f"\n## You — {now}\n\n{body.message.strip()}\n")
             f.write(f"\n## Agent — {now}\n\n{reply.strip()}\n")
 
@@ -901,6 +902,66 @@ async def ei_chat(body: ChatRequest, org: str = Query(...)):
                 await _dexec(container, ["rm", "-rf", container_run_root], timeout=30)
             except Exception:
                 pass
+
+
+class RenameChatRequest(BaseModel):
+    session_id: str
+    title: str
+
+
+@router.get("/api/ei/chat/sessions", dependencies=[Depends(require_api_key)])
+async def ei_chat_sessions(org: str = Query(...)):
+    """List chat sessions (id + title) from chats/ on workspace main."""
+    org = sanitize_org_id(org)
+    repo = org_repo_path(org)
+    if not os.path.isdir(repo):
+        return []
+    try:
+        out = await _git(["ls-tree", "--name-only", "main", "chats/"], cwd=repo)
+    except RuntimeError:
+        return []
+    sessions = []
+    for f in sorted(out.splitlines(), reverse=True):
+        if not f.endswith(".md"):
+            continue
+        sid = os.path.basename(f)[:-3]
+        title = sid
+        try:
+            head = await _git(["show", f"main:{f}"], cwd=repo)
+            first = head.splitlines()[0] if head else ""
+            if first.startswith("# "):
+                title = first[2:].strip() or sid
+        except RuntimeError:
+            pass
+        sessions.append({"id": sid, "title": title})
+    return sessions
+
+
+@router.post("/api/ei/chat/sessions/rename", dependencies=[Depends(require_api_key)])
+async def ei_chat_rename(body: RenameChatRequest, org: str = Query(...)):
+    """Rename a chat session: rewrite the H1 of its workspace file (committed)."""
+    org = sanitize_org_id(org)
+    sid = re.sub(r"[^a-zA-Z0-9_-]", "", body.session_id)
+    title = " ".join(body.title.split())[:80]
+    if not sid or not title:
+        raise HTTPException(status_code=400, detail="session_id and title required")
+    repo = org_repo_path(org)
+    rel = f"chats/{sid}.md"
+    path = os.path.join(repo, rel)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="session not found")
+    async with _org_lock(org):
+        with open(path) as f:
+            lines = f.read().splitlines()
+        if lines and lines[0].startswith("# "):
+            lines[0] = f"# {title}"
+        else:
+            lines.insert(0, f"# {title}")
+        with open(path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        await _git(["add", rel], cwd=repo)
+        await _git(["commit", "-m", f"chat: rename {sid} -> {title[:40]}"], cwd=repo)
+    return {"renamed": True, "id": sid, "title": title}
 
 
 # ── Org workspace read API (workspace viewer — read-only) ──────────────────
