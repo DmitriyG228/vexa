@@ -1,0 +1,29 @@
+{
+  "note": "SYNTHETIC FIXTURE — questions over the fictional workspace in fixtures/workspace-t2.",
+  "questions": [
+    {
+      "id": "q1",
+      "question": "Which encoder lot was failing, and what did the supplier offer?",
+      "expected_keywords": ["TQ-117", "replacement", "no cost|no-cost|free"],
+      "expected_source": "notes/meeting-beta.md"
+    },
+    {
+      "id": "q2",
+      "question": "What is the v2.4 release gated on?",
+      "expected_keywords": ["custodian", "FW-2291"],
+      "expected_source": "notes/meeting-gamma.md"
+    },
+    {
+      "id": "q3",
+      "question": "Who owns drafting the key provisioning ceremony runbook and by when?",
+      "expected_keywords": ["Ines Calder", "July 10"],
+      "expected_source": "notes/meeting-alpha.md"
+    },
+    {
+      "id": "q4",
+      "question": "What was the measured worst-case actuation latency and what is the budget?",
+      "expected_keywords": ["0.82", "1.0|1 ms|one millisecond"],
+      "expected_source": "notes/meeting-gamma.md"
+    }
+  ]
+}

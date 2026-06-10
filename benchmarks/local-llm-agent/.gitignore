@@ -1,0 +1,6 @@
+# per-run scratch workspaces (raw agent output stays local; JSONL results are committed)
+.work/
+
+# undo the repo-root python-build ignores that would swallow benchmark sources
+!lib/
+!fixtures/t3/services.txt

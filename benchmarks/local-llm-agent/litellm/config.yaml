@@ -1,0 +1,24 @@
+# LiteLLM proxy config for the local-llm-agent benchmark (Arm 2).
+# Exposes the Anthropic /v1/messages route in front of Mistral La Plateforme.
+# The MISTRAL_API_KEY is injected at runtime via the environment — never on disk.
+model_list:
+  - model_name: mistral-small-latest
+    litellm_params:
+      model: mistral/mistral-small-latest
+      api_key: os.environ/MISTRAL_API_KEY
+  - model_name: devstral-small-latest
+    litellm_params:
+      model: mistral/devstral-small-latest
+      api_key: os.environ/MISTRAL_API_KEY
+  - model_name: mistral-medium-latest
+    litellm_params:
+      model: mistral/mistral-medium-latest
+      api_key: os.environ/MISTRAL_API_KEY
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  # Local-only shared secret between the agent container and the proxy.
+  # NOT a credential for any external system.
+  master_key: os.environ/LITELLM_MASTER_KEY

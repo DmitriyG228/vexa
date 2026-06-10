@@ -1,0 +1,17 @@
+{
+  "meeting_id": "meeting-alpha",
+  "title_keywords": ["Atlas", "firmware", "planning"],
+  "decisions": [
+    {"id": "drift-compensation", "keywords": ["encoder drift", "compensation", "v2.4"]},
+    {"id": "latency-gate", "keywords": ["motor controller", "latency", "CI"]},
+    {"id": "secure-boot", "keywords": ["secure boot", "v2.4"]}
+  ],
+  "action_items": [
+    {"id": "tessier-addendum", "owner": "Ravi Mehta", "keywords": ["Tessier", "addendum"]},
+    {"id": "latency-test", "owner": "Jonas Pike", "keywords": ["latency", "test"]},
+    {"id": "rig-transfer", "owner": "Ravi Mehta", "keywords": ["rig", "Hamburg"]},
+    {"id": "provisioning-runbook", "owner": "Ines Calder", "keywords": ["runbook", "July 10"]},
+    {"id": "interview-loop", "owner": "Ravi Mehta", "keywords": ["interview", "recruiting"]}
+  ],
+  "summary_keywords": ["v2.4", "secure boot", "encoder"]
+}

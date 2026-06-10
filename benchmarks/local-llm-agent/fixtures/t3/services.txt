@@ -1,0 +1,9 @@
+# Helios Dynamics — service status export (SYNTHETIC FIXTURE)
+telemetry-ingest UP
+fleet-scheduler DOWN
+map-tiles UP
+ota-coordinator DOWN
+billing-sync UP
+route-planner UP
+diagnostics-feed DOWN
+auth-broker UP

@@ -1,0 +1,13 @@
+# Arm 3 agent container: Mistral Vibe (Apache-2.0), default config, Mistral API direct.
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl ca-certificates ripgrep && \
+    pip install --no-cache-dir mistral-vibe && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1001 agent && mkdir -p /workspace && chown -R agent:agent /workspace
+USER agent
+ENV VIBE_DISABLE_TELEMETRY=1
+WORKDIR /workspace
+ENTRYPOINT ["vibe"]
