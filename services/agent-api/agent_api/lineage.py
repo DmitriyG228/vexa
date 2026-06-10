@@ -724,6 +724,35 @@ class ChatRequest(BaseModel):
     user_id: Optional[str] = None
 
 
+def _extract_agent_reply(stdout: str) -> Optional[str]:
+    """Best-effort: pull the last assistant message out of an agent CLI's JSON
+    output (e.g. Vibe --output json prints the conversation log)."""
+    text = stdout.strip()
+    if not text:
+        return None
+    start = min((i for i in (text.find("["), text.find("{")) if i >= 0), default=-1)
+    if start < 0:
+        return None
+    try:
+        data = json.loads(text[start:])
+    except Exception:
+        return None
+    msgs = data if isinstance(data, list) else data.get("messages") if isinstance(data, dict) else None
+    if not isinstance(msgs, list):
+        return None
+    for m in reversed(msgs):
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            c = m.get("content")
+            if isinstance(c, str) and c.strip():
+                return c.strip()
+            if isinstance(c, list):
+                parts = [b.get("text", "") for b in c if isinstance(b, dict)]
+                joined = "\n".join(p for p in parts if p).strip()
+                if joined:
+                    return joined
+    return None
+
+
 def _build_chat_prompt(message: str) -> str:
     return (
         "You are the organization's knowledge agent, working inside its git "
@@ -737,8 +766,9 @@ def _build_chat_prompt(message: str) -> str:
         "restructure knowledge, edit/create files following the workspace "
         "conventions (dated confidence-scored appends in routine-updates "
         "regions; templates for new entities; sg/ nodes for strategy).\n"
-        "3. Write your final reply for the user as markdown to .ei/reply.md "
-        "(create the .ei directory; it is never committed).\n"
+        "3. ALWAYS write your final reply for the user as markdown to "
+        ".ei/reply.md — even for greetings or questions needing no file "
+        "changes (create the .ei directory; it is never committed).\n"
         "4. Do not run git commands; the platform commits your changes."
     )
 
@@ -829,8 +859,10 @@ async def ei_chat(body: ChatRequest, org: str = Query(...)):
                 commit_sha = await _git(["rev-parse", "HEAD"], cwd=repo)
 
         if not reply:
-            tail = out.decode(errors="replace").strip()
-            reply = tail[-1500:] if tail else "(the agent returned no reply)"
+            stdout_text = out.decode(errors="replace")
+            reply = _extract_agent_reply(stdout_text) or ""
+        if not reply:
+            reply = "(the agent returned no reply)"
         return {"reply": reply, "commit": commit_sha, "files_changed": len(files)}
     finally:
         if touch_task:
