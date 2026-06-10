@@ -50,16 +50,6 @@ export async function GET(req: NextRequest, ctx: Ctx): Promise<Response> {
     headers: AGENT_API_TOKEN ? { "X-API-Key": AGENT_API_TOKEN } : {},
     cache: "no-store",
   });
-  if (leaf === "chat/stream") {
-    return new Response(resp.body, {
-      status: resp.status,
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-      },
-    });
-  }
   const text = await resp.text();
   try {
     return Response.json(JSON.parse(text), { status: resp.status });
@@ -114,6 +104,16 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
     body: JSON.stringify(payload),
     cache: "no-store",
   });
+  if (leaf === "chat/stream") {
+    return new Response(resp.body, {
+      status: resp.status,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
   const text = await resp.text();
   try {
     return Response.json(JSON.parse(text), { status: resp.status });
