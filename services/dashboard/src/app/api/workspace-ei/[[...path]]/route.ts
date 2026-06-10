@@ -32,11 +32,14 @@ export async function GET(req: NextRequest, ctx: Ctx): Promise<Response> {
 
   const { path = [] } = await ctx.params;
   const leaf = path.join("/");
-  if (leaf !== "tree" && leaf !== "file") {
+  if (leaf !== "tree" && leaf !== "file" && leaf !== "sessions") {
     return Response.json({ detail: "Not found" }, { status: 404 });
   }
 
-  const target = new URL(`${AGENT_API_URL}/api/ei/workspace/${leaf}`);
+  const target =
+    leaf === "sessions"
+      ? new URL(`${AGENT_API_URL}/api/ei/chat/sessions`)
+      : new URL(`${AGENT_API_URL}/api/ei/workspace/${leaf}`);
   target.searchParams.set("org", auth.org);
   if (leaf === "file") {
     const filePath = req.nextUrl.searchParams.get("path") || "";
@@ -67,20 +70,30 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
     );
   }
   const { path = [] } = await ctx.params;
-  if (path.join("/") !== "chat") {
+  const leaf = path.join("/");
+  if (leaf !== "chat" && leaf !== "sessions/rename") {
     return Response.json({ detail: "Not found" }, { status: 404 });
   }
-  let body: { message?: string };
+  let body: { message?: string; session_id?: string; title?: string };
   try {
     body = await req.json();
   } catch {
     return Response.json({ detail: "Invalid JSON" }, { status: 400 });
   }
-  const message = (body.message || "").trim();
-  if (!message) {
-    return Response.json({ detail: "message required" }, { status: 400 });
+  let target: URL;
+  let payload: Record<string, unknown>;
+  if (leaf === "chat") {
+    const message = (body.message || "").trim();
+    if (!message) {
+      return Response.json({ detail: "message required" }, { status: 400 });
+    }
+    target = new URL(`${AGENT_API_URL}/api/ei/chat`);
+    // user_id resolved server-side from the session — never client-supplied
+    payload = { message, user_id: auth.userId, session_id: body.session_id || null };
+  } else {
+    target = new URL(`${AGENT_API_URL}/api/ei/chat/sessions/rename`);
+    payload = { session_id: body.session_id || "", title: body.title || "" };
   }
-  const target = new URL(`${AGENT_API_URL}/api/ei/chat`);
   target.searchParams.set("org", auth.org);
   const resp = await fetch(target.toString(), {
     method: "POST",
@@ -88,8 +101,7 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
       "Content-Type": "application/json",
       ...(AGENT_API_TOKEN ? { "X-API-Key": AGENT_API_TOKEN } : {}),
     },
-    // user_id resolved server-side from the session — never client-supplied
-    body: JSON.stringify({ message, user_id: auth.userId }),
+    body: JSON.stringify(payload),
     cache: "no-store",
   });
   const text = await resp.text();

@@ -135,6 +135,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
   // Contextual sidebar data (per primary mode)
   const [proposalsCount, setProposalsCount] = useState(0);
   const [wsFiles, setWsFiles] = useState<string[]>([]);
+  const [chatSessions, setChatSessions] = useState<{ id: string; title: string }[]>([]);
 
   const pathname = usePathname();
 
@@ -145,6 +146,14 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
       .then((d) =>
         setWsFiles(((d.files as string[]) || []).filter((f) => f.endsWith(".md")).slice(0, 40))
       )
+      .catch(() => {});
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!pathname.startsWith("/chat")) return;
+    fetch("/api/workspace-ei/sessions")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setChatSessions(Array.isArray(d) ? d : []))
       .catch(() => {});
   }, [pathname]);
 
@@ -161,6 +170,19 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const [showAdminAuthModal, setShowAdminAuthModal] = useState(false);
   const { config } = useRuntimeConfig();
   const isHosted = config?.hostedMode ?? false;
+
+  const handleRenameChat = (sid: string, current: string) => {
+    const title = window.prompt("Rename chat", current);
+    if (!title || title === current) return;
+    fetch("/api/workspace-ei/sessions/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sid, title }),
+    })
+      .then((r) => r.ok && fetch("/api/workspace-ei/sessions").then((x) => x.json()))
+      .then((d) => Array.isArray(d) && setChatSessions(d))
+      .catch(() => {});
+  };
 
   const handleJoinClick = () => {
     openJoinModal();
@@ -257,28 +279,27 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                   <Plus className="h-4 w-4" />
                   New chat
                 </button>
-                {wsFiles.filter((f) => f.startsWith("chats/")).length > 0 && (
+                {chatSessions.length > 0 && (
                   <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
                     Conversations
                   </p>
                 )}
                 <div className="max-h-56 overflow-y-auto space-y-0.5">
-                  {wsFiles
-                    .filter((f) => f.startsWith("chats/"))
-                    .map((f) => {
-                      const sid = f.slice(6).replace(/\.md$/, "");
-                      return (
-                        <Link
-                          key={f}
-                          href={`/chat?session=${encodeURIComponent(sid)}`}
-                          onClick={onClose}
-                          title={sid}
-                          className="block truncate rounded px-3 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                        >
-                          {sid}
-                        </Link>
-                      );
-                    })}
+                  {chatSessions.map((cs) => (
+                    <Link
+                      key={cs.id}
+                      href={`/chat?session=${encodeURIComponent(cs.id)}`}
+                      onClick={onClose}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        handleRenameChat(cs.id, cs.title);
+                      }}
+                      title={`${cs.title} — right-click to rename`}
+                      className="block truncate rounded px-3 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    >
+                      {cs.title}
+                    </Link>
+                  ))}
                 </div>
               </div>
             )}
