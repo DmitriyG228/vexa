@@ -395,6 +395,12 @@ services:
       - VEXA_ALLOW_DIRECT_LOGIN=${VEXA_ALLOW_DIRECT_LOGIN:-true}
       - MINIO_INTERNAL_ENDPOINT=${MINIO_INTERNAL_ENDPOINT:-http://minio:9000}
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-}
+      # union ei-eyeball (#24+#25): the proposals proxy (src/app/api/proposals)
+      # forwards to agent-api's sign API; without these it falls back to
+      # http://localhost:8100, which is wrong inside the container. The token
+      # is agent-api's existing API_KEY seam (BOT_API_TOKEN; empty = dev open).
+      - AGENT_API_URL=http://agent-api:8100
+      - AGENT_API_TOKEN=${BOT_API_TOKEN:-}
     init: true
     depends_on:
       - api-gateway
