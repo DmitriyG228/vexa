@@ -1,0 +1,716 @@
+"""Enterprise-Intelligence lineage — meeting.completed → agent proposal → human-signed merge.
+
+Pack ei-lineage (issue #24, epic #21). The missing link between meeting-api's
+POST_MEETING_HOOKS delivery seam and the agent runtime:
+
+  meeting.completed envelope (consumed, never re-transported)
+    → resolve user → org EI config (org-level enable flag, default OFF)
+    → claim the meeting (duplicate-delivery-safe, #330 receiving-side lesson)
+    → ensure the org's seeded knowledge git repo (workspace, one per org)
+    → ensure the org's agent container (runtime-api)
+    → agent runs with workspace clone + transcript
+    → proposal branch  meeting/<meeting-id>  appears in the org repo
+       ONLY after a fully successful run (crash → no partial branch)
+    → sign API (frozen contract v1): list / diff / sign(merge) / reject
+
+Frozen sign-API contract v1 (P2-signed on issue #24 — #25 builds against it):
+
+  GET  /api/proposals?org=<org_id>       -> 200 [{id, meeting_id, meeting_title,
+                                                  created_at, branch, summary, files_changed}]
+  GET  /api/proposals/{id}/diff          -> 200 {proposal_id, files: [{path,
+                                                  status: added|modified, before, after, patch}]}
+  POST /api/proposals/{id}/sign          -> 200 {merged: true, merge_commit}
+                                            (idempotent; 409 if already merged/rejected)
+  POST /api/proposals/{id}/reject {note} -> 200 {closed: true}  (note required)
+
+State:
+  - Git (the org workspace repo on a volume) is the source of truth for content:
+    main branch + proposal branches. Nothing reaches main except via /sign.
+  - Redis carries run/claim status (`ei:claim:*`) and proposal metadata
+    (`ei:proposal:*`, `ei:org:*:proposals`).
+
+Provider-agnostic by construction: the agent invocation is built from env
+(AGENT_CLI / EI_AGENT_CMD / DEFAULT_MODEL) with an optional per-org override in
+the org's EI config (`user.data.ei.agent_cli`) — the same admin-controlled seam
+that already injects per-user container env. No provider is hardcoded.
+"""
+
+import asyncio
+import io
+import json
+import logging
+import os
+import re
+import shlex
+import tarfile
+import time
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from agent_api import config
+from agent_api.auth import require_api_key
+
+logger = logging.getLogger("agent_api.lineage")
+
+router = APIRouter()
+
+# Module singletons, set once from main.startup() via configure().
+_redis: Any = None
+_cm: Any = None
+
+# Per-org asyncio locks serializing git mutations on the org repo.
+_org_locks: dict[str, asyncio.Lock] = {}
+
+# Background proposal tasks (kept referenced so they are not GC'd).
+_tasks: set = set()
+
+_GIT_IDENT = ["-c", "user.name=Vexa EI", "-c", "user.email=ei-agent@vexa.ai"]
+_ORG_RE = re.compile(r"[^a-z0-9_-]+")
+
+CLAIM_RUNNING = "running"
+CLAIM_PROPOSED = "proposed"
+CLAIM_FAILED = "failed"
+
+# Atomic claim: take the claim if absent OR if the previous run failed
+# (safe retry). Never re-claim a running/proposed meeting — exactly one
+# proposal per meeting (#330 receiving-side lesson, claim BEFORE run).
+_CLAIM_LUA = """
+local cur = redis.call('GET', KEYS[1])
+if cur then
+  local ok, prev = pcall(cjson.decode, cur)
+  if ok and prev['status'] == 'failed' then
+    redis.call('SET', KEYS[1], ARGV[1])
+    return 1
+  end
+  return 0
+end
+redis.call('SET', KEYS[1], ARGV[1])
+return 1
+"""
+
+
+def configure(redis, cm) -> None:
+    """Wire module singletons at app startup."""
+    global _redis, _cm
+    _redis = redis
+    _cm = cm
+
+
+def _org_lock(org_id: str) -> asyncio.Lock:
+    if org_id not in _org_locks:
+        _org_locks[org_id] = asyncio.Lock()
+    return _org_locks[org_id]
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def sanitize_org_id(raw: str) -> str:
+    org = _ORG_RE.sub("-", str(raw).strip().lower()).strip("-")
+    if not org:
+        raise ValueError(f"Unusable org id: {raw!r}")
+    return org
+
+
+# ── Paths ──────────────────────────────────────────────────────────────────
+
+
+def org_repo_path(org_id: str) -> str:
+    return os.path.join(config.EI_WORKSPACES_PATH, org_id, "repo")
+
+
+def _runs_dir(org_id: str) -> str:
+    return os.path.join(config.EI_WORKSPACES_PATH, org_id, ".runs")
+
+
+# ── Subprocess helpers ─────────────────────────────────────────────────────
+
+
+async def _run(argv: list[str], cwd: Optional[str] = None, stdin: Optional[bytes] = None,
+               timeout: int = 120) -> tuple[int, bytes]:
+    """Run a local subprocess, return (rc, combined output)."""
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        cwd=cwd,
+        stdin=asyncio.subprocess.PIPE if stdin is not None else None,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(input=stdin), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return 124, b"timeout"
+    return proc.returncode or 0, out or b""
+
+
+async def _git(args: list[str], cwd: Optional[str] = None, check: bool = True,
+               timeout: int = 60) -> str:
+    rc, out = await _run(["git", *_GIT_IDENT, *args], cwd=cwd, timeout=timeout)
+    text = out.decode(errors="replace").strip()
+    if check and rc != 0:
+        raise RuntimeError(f"git {' '.join(args[:3])} failed (rc={rc}): {text[:500]}")
+    return text
+
+
+async def _dexec(container: str, argv: list[str], stdin: Optional[bytes] = None,
+                 timeout: int = 120) -> tuple[int, bytes]:
+    """docker exec into the agent container."""
+    cmd = ["docker", "exec"]
+    if stdin is not None:
+        cmd.append("-i")
+    cmd += [container, *argv]
+    return await _run(cmd, stdin=stdin, timeout=timeout)
+
+
+# ── Tar transfer (agent-api FS ⇄ agent container) ──────────────────────────
+
+
+def _tar_dir(path: str) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for entry in sorted(os.listdir(path)):
+            tf.add(os.path.join(path, entry), arcname=entry)
+    return buf.getvalue()
+
+
+def _untar_to(data: bytes, path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+        tf.extractall(path)  # noqa: S202 — archive produced by our own container
+
+
+# ── EI org config (fresh fetch — flag flips must take effect immediately) ──
+
+
+async def resolve_ei_config(user_id) -> Optional[dict]:
+    """Fetch user.data.ei from admin-api. Returns None when EI is not enabled.
+
+    Never cached: the org-level enable flag and agent settings must be
+    re-read on every event (default OFF — absent key means disabled).
+    """
+    try:
+        int_id = int(user_id)
+    except (TypeError, ValueError):
+        logger.info(f"EI: non-numeric user_id {user_id!r} — treating as disabled")
+        return None
+
+    headers = {"X-Admin-API-Key": config.ADMIN_API_TOKEN} if config.ADMIN_API_TOKEN else {}
+    async with httpx.AsyncClient(base_url=config.ADMIN_API_URL, timeout=10,
+                                 headers=headers) as client:
+        resp = await client.get(f"/admin/users/{int_id}")
+    if resp.status_code == 404:
+        logger.info(f"EI: user {int_id} not found — treating as disabled")
+        return None
+    if resp.status_code != 200:
+        raise RuntimeError(f"admin-api returned {resp.status_code} for user {int_id}")
+
+    data = resp.json().get("data") or {}
+    ei = data.get("ei") or {}
+    if not ei.get("enabled"):
+        return None
+    org_raw = ei.get("org_id") or f"user-{int_id}"
+    ei = dict(ei)
+    ei["org_id"] = sanitize_org_id(org_raw)
+    return ei
+
+
+# ── Claim / run-status (Redis) ─────────────────────────────────────────────
+
+
+def _claim_key(org_id: str, meeting_id) -> str:
+    return f"ei:claim:{org_id}:{meeting_id}"
+
+
+async def claim_meeting(org_id: str, meeting_id, event_id: str) -> bool:
+    """Atomically claim a meeting for an agent run. True = we own the run."""
+    value = json.dumps({
+        "status": CLAIM_RUNNING,
+        "event_id": event_id,
+        "updated_at": _now(),
+    })
+    res = await _redis.eval(_CLAIM_LUA, 1, _claim_key(org_id, meeting_id), value)
+    return bool(res)
+
+
+async def set_claim(org_id: str, meeting_id, status: str, **extra) -> None:
+    raw = await _redis.get(_claim_key(org_id, meeting_id))
+    record = json.loads(raw) if raw else {}
+    record.update(status=status, updated_at=_now(), **extra)
+    await _redis.set(_claim_key(org_id, meeting_id), json.dumps(record))
+
+
+async def get_claim(org_id: str, meeting_id) -> Optional[dict]:
+    raw = await _redis.get(_claim_key(org_id, meeting_id))
+    return json.loads(raw) if raw else None
+
+
+# ── Proposal store (Redis metadata; git is the content truth) ──────────────
+
+
+async def _save_proposal(record: dict) -> None:
+    pid = record["id"]
+    await _redis.set(f"ei:proposal:{pid}", json.dumps(record))
+    await _redis.sadd(f"ei:org:{record['org_id']}:proposals", pid)
+
+
+async def get_proposal(pid: str) -> Optional[dict]:
+    raw = await _redis.get(f"ei:proposal:{pid}")
+    return json.loads(raw) if raw else None
+
+
+async def list_org_proposals(org_id: str) -> list[dict]:
+    pids = await _redis.smembers(f"ei:org:{org_id}:proposals")
+    records = []
+    for pid in pids:
+        rec = await get_proposal(pid)
+        if rec:
+            records.append(rec)
+    records.sort(key=lambda r: r.get("created_at", ""))
+    return records
+
+
+# ── Workspace (seeded git repo per org) ────────────────────────────────────
+
+
+async def ensure_workspace(org_id: str) -> str:
+    """Ensure the org's knowledge repo exists; seed it on first use.
+
+    Seed template ships in the agent-api image (services/agent-api/workspace-seed,
+    synthetic content only). Returns the repo path.
+    """
+    repo = org_repo_path(org_id)
+    async with _org_lock(org_id):
+        if os.path.isdir(os.path.join(repo, ".git")):
+            return repo
+        seed = config.EI_WORKSPACE_SEED_PATH
+        if not os.path.isdir(seed):
+            raise RuntimeError(f"workspace seed missing at {seed}")
+        os.makedirs(repo, exist_ok=True)
+        rc, out = await _run(["cp", "-a", f"{seed}/.", repo])
+        if rc != 0:
+            raise RuntimeError(f"seed copy failed: {out.decode(errors='replace')[:300]}")
+        await _git(["init", "-b", "main"], cwd=repo)
+        await _git(["add", "-A"], cwd=repo)
+        await _git(["commit", "-m", f"seed: org workspace for {org_id}"], cwd=repo)
+        logger.info(f"EI: seeded workspace for org {org_id} at {repo}")
+        return repo
+
+
+async def _branch_exists(repo: str, branch: str) -> bool:
+    rc, _ = await _run(["git", "-C", repo, "rev-parse", "--verify", "--quiet",
+                        f"refs/heads/{branch}"])
+    return rc == 0
+
+
+# ── Transcript fetch ───────────────────────────────────────────────────────
+
+
+async def fetch_transcript(meeting_id) -> str:
+    """Best-effort transcript fetch from the collector's internal endpoint."""
+    url = f"{config.TRANSCRIPTION_COLLECTOR_URL}/internal/transcripts/{meeting_id}"
+    headers = ({"X-Internal-Secret": config.INTERNAL_API_SECRET}
+               if config.INTERNAL_API_SECRET else {})
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.warning(f"EI: transcript fetch for meeting {meeting_id} -> "
+                           f"{resp.status_code}; continuing with empty transcript")
+            return ""
+        segments = resp.json() or []
+    except Exception as e:
+        logger.warning(f"EI: transcript fetch failed for meeting {meeting_id}: {e}")
+        return ""
+    lines = []
+    for seg in segments:
+        speaker = (seg.get("speaker") or "Unknown").strip()
+        text = (seg.get("text") or "").strip()
+        if text:
+            lines.append(f"{speaker}: {text}")
+    return "\n".join(lines)
+
+
+# ── Agent invocation ───────────────────────────────────────────────────────
+
+
+def _agent_command(ei: dict) -> str:
+    """Build the agent CLI invocation prefix. The prompt is appended as ONE
+    shell-quoted argument. Resolution order (most specific wins, no provider
+    hardcoded): org EI config `agent_cli` → env EI_AGENT_CMD → env AGENT_CLI
+    (+ AGENT_ALLOWED_TOOLS / model from org config or DEFAULT_MODEL)."""
+    if ei.get("agent_cli"):
+        return str(ei["agent_cli"])
+    if config.EI_AGENT_CMD:
+        return config.EI_AGENT_CMD
+    parts = [config.AGENT_CLI, "--allowedTools", shlex.quote(config.AGENT_ALLOWED_TOOLS)]
+    model = ei.get("model") or config.DEFAULT_MODEL
+    if model:
+        parts += ["--model", shlex.quote(str(model))]
+    parts.append("-p")
+    return " ".join(parts)
+
+
+def _build_prompt(meeting_id, meeting: dict) -> str:
+    title = meeting.get("title") or f"{meeting.get('platform', 'meeting')} {meeting_id}"
+    return f"""A meeting has completed and its transcript must be folded into this org's knowledge graph.
+
+Meeting: {title} (id {meeting_id})
+Transcript: ../input/transcript.md  (read-only input — do NOT copy it into the repo)
+Metadata:   ../input/meeting.json
+
+You are in the org knowledge repository working tree. First read AGENT.md at the
+repository root and follow its conventions exactly (dated confidence-scored appends,
+single-write-path regions, [[wikilinks]]). Then:
+
+1. Create the meeting artifact graph/kg/entities/meetings/{meeting_id}-<slug>.md
+   from templates/meeting._template.md.
+2. For every person/company that matters in the meeting, update (or create from the
+   matching template) their entity file under graph/kg/entities/, appending a dated,
+   confidence-scored entry inside the routine-updates region only.
+3. Link artifacts with [[wikilinks]].
+
+Modify files only inside this repository working tree. Do not run git commands —
+branching and commits happen outside the agent.
+"""
+
+
+async def _touch_loop(container: str) -> None:
+    """Keep runtime-api's idle reaper away while a long agent run is active."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await _cm._touch(container)
+        except Exception:
+            pass
+
+
+# ── The proposal pipeline ──────────────────────────────────────────────────
+
+
+async def run_proposal(org_id: str, meeting_id, ei: dict, envelope: dict) -> None:
+    """Background pipeline: workspace → container → agent → proposal branch.
+
+    Crash-safety invariant: the proposal branch is fetched into the org repo
+    only after the agent run succeeded AND produced a schema-conforming commit
+    in an isolated working clone. Any failure before that leaves the org repo
+    untouched; the claim flips to `failed` (visible status, safe retry).
+    """
+    meeting = (envelope.get("data") or {}).get("meeting") or {}
+    branch = f"meeting/{meeting_id}"
+    run_id = f"{meeting_id}-{int(time.time())}"
+    run_dir = os.path.join(_runs_dir(org_id), run_id)
+    container_run_root = f"/tmp/ei-run-{org_id}-{meeting_id}"
+    container = None
+    touch_task = None
+    try:
+        repo = await ensure_workspace(org_id)
+
+        # Idempotency belt-and-braces: proposal branch already in the repo.
+        if await _branch_exists(repo, branch):
+            logger.info(f"EI: branch {branch} already exists for org {org_id} — skipping run")
+            await set_claim(org_id, meeting_id, CLAIM_PROPOSED)
+            return
+
+        transcript = await fetch_transcript(meeting_id)
+
+        # Working clone — the agent never touches the org repo directly.
+        os.makedirs(run_dir, exist_ok=True)
+        async with _org_lock(org_id):
+            await _git(["clone", "--branch", "main", "--single-branch", repo,
+                        os.path.join(run_dir, "repo")])
+        input_dir = os.path.join(run_dir, "input")
+        os.makedirs(input_dir, exist_ok=True)
+        with open(os.path.join(input_dir, "transcript.md"), "w") as f:
+            f.write(transcript or "(no transcript available)\n")
+        with open(os.path.join(input_dir, "meeting.json"), "w") as f:
+            json.dump(meeting, f, indent=2)
+
+        # Org agent container via runtime-api (one per org — tenant isolation).
+        org_env = ei.get("env") or {}
+        container = await _cm.ensure_container(
+            f"ei-{org_id}", session_id="ei",
+            config={"env": org_env} if org_env else {},
+        )
+
+        # Ship the working clone + inputs into the container.
+        payload = _tar_dir(run_dir)
+        rc, out = await _dexec(
+            container,
+            ["sh", "-c",
+             f"rm -rf {container_run_root} && mkdir -p {container_run_root} "
+             f"&& tar -xz -C {container_run_root}"],
+            stdin=payload, timeout=120,
+        )
+        if rc != 0:
+            raise RuntimeError(f"workspace transfer failed: {out.decode(errors='replace')[:300]}")
+
+        # Run the agent.
+        prompt = _build_prompt(meeting_id, meeting)
+        agent_cmd = _agent_command(ei)
+        shell_cmd = (
+            f"cd {container_run_root}/repo && "
+            f"EI_MEETING_ID={shlex.quote(str(meeting_id))} EI_ORG_ID={shlex.quote(org_id)} "
+            f"{agent_cmd} {shlex.quote(prompt)}"
+        )
+        logger.info(f"EI: agent run starting for org={org_id} meeting={meeting_id} "
+                    f"container={container}")
+        touch_task = asyncio.create_task(_touch_loop(container))
+        rc, out = await _dexec(container, ["bash", "-c", shell_cmd],
+                               timeout=config.EI_AGENT_TIMEOUT)
+        touch_task.cancel()
+        touch_task = None
+        tail = out.decode(errors="replace")[-2000:]
+        if rc != 0:
+            raise RuntimeError(f"agent run failed (rc={rc}): {tail[:500]}")
+
+        # Pull the (possibly modified) clone back out.
+        rc, data = await _dexec(container, ["tar", "-cz", "-C", container_run_root, "repo"],
+                                timeout=120)
+        if rc != 0:
+            raise RuntimeError("workspace retrieval failed")
+        out_dir = os.path.join(run_dir, "out")
+        _untar_to(data, out_dir)
+        out_repo = os.path.join(out_dir, "repo")
+
+        # Validate + commit the proposal in the isolated clone.
+        await _git(["checkout", "-b", branch], cwd=out_repo)
+        await _git(["add", "-A"], cwd=out_repo)
+        changed = await _git(["diff", "--cached", "--name-status"], cwd=out_repo)
+        if not changed.strip():
+            raise RuntimeError("agent run produced no changes")
+        new_meeting_artifacts = [
+            line.split("\t", 1)[1] for line in changed.splitlines()
+            if line.startswith("A") and "graph/kg/entities/meetings/" in line
+        ]
+        if not new_meeting_artifacts:
+            raise RuntimeError(
+                "agent run produced changes but no new meeting artifact under "
+                "graph/kg/entities/meetings/ — rejecting non-conforming proposal")
+        await _git(["commit", "-m", f"proposal: meeting {meeting_id}"], cwd=out_repo)
+
+        # Atomic publication: the branch lands in the org repo in one fetch.
+        async with _org_lock(org_id):
+            if await _branch_exists(repo, branch):
+                raise RuntimeError(f"branch {branch} appeared concurrently")
+            await _git(["fetch", out_repo, f"{branch}:{branch}"], cwd=repo)
+
+        files = [ln for ln in changed.splitlines() if ln.strip()]
+        record = {
+            "id": f"prop_{uuid.uuid4().hex[:12]}",
+            "org_id": org_id,
+            "meeting_id": meeting_id,
+            "meeting_title": meeting.get("title")
+                             or f"{meeting.get('platform', 'meeting')} {meeting_id}",
+            "created_at": _now(),
+            "branch": branch,
+            "summary": f"meeting artifact {new_meeting_artifacts[0]}"
+                       f" + {len(files) - 1} other change(s)",
+            "files_changed": len(files),
+            "status": "open",
+        }
+        await _save_proposal(record)
+        await set_claim(org_id, meeting_id, CLAIM_PROPOSED, proposal_id=record["id"])
+        logger.info(f"EI: proposal {record['id']} ({branch}) created for org {org_id}")
+
+    except Exception as e:
+        logger.error(f"EI: proposal run failed for org={org_id} meeting={meeting_id}: {e}",
+                     exc_info=True)
+        try:
+            await set_claim(org_id, meeting_id, CLAIM_FAILED, error=str(e)[:500])
+        except Exception:
+            logger.exception("EI: could not record failed claim")
+    finally:
+        if touch_task:
+            touch_task.cancel()
+        # No partial state anywhere: temp run dir + container scratch removed.
+        await _run(["rm", "-rf", run_dir])
+        if container:
+            try:
+                await _dexec(container, ["rm", "-rf", container_run_root], timeout=30)
+            except Exception:
+                pass
+
+
+# ── Event consumer ─────────────────────────────────────────────────────────
+
+
+async def handle_meeting_completed(envelope: dict) -> dict:
+    """Consume one meeting.completed envelope (POST_MEETING_HOOKS target).
+
+    Returns a status dict; raises HTTPException(503) on infrastructure errors
+    so meeting-api's outbound ledger keeps the event retryable.
+    """
+    event_type = envelope.get("event_type", "")
+    if event_type != "meeting.completed":
+        return {"status": "ignored", "detail": f"event_type {event_type!r} not consumed"}
+
+    meeting = (envelope.get("data") or {}).get("meeting") or {}
+    meeting_id = meeting.get("id")
+    user_id = meeting.get("user_id")
+    if meeting_id is None or user_id is None:
+        return {"status": "ignored", "detail": "missing meeting id/user_id"}
+
+    try:
+        ei = await resolve_ei_config(user_id)
+    except Exception as e:
+        logger.error(f"EI: cannot resolve EI config for user {user_id}: {e}")
+        raise HTTPException(503, "EI config resolution failed; retry later")
+
+    if not ei:
+        # Org-level enable flag is OFF (default) — fully inert, no state created.
+        return {"status": "inert", "detail": "EI disabled for this user/org"}
+
+    org_id = ei["org_id"]
+    event_id = envelope.get("event_id", "")
+    claimed = await claim_meeting(org_id, meeting_id, event_id)
+    if not claimed:
+        claim = await get_claim(org_id, meeting_id)
+        return {
+            "status": "duplicate",
+            "detail": f"meeting already {((claim or {}).get('status')) or 'claimed'}",
+            "org_id": org_id,
+            "meeting_id": meeting_id,
+        }
+
+    task = asyncio.create_task(run_proposal(org_id, meeting_id, ei, envelope))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+    return {"status": "accepted", "org_id": org_id, "meeting_id": meeting_id}
+
+
+# ── Sign API (frozen contract v1) ──────────────────────────────────────────
+
+
+class RejectRequest(BaseModel):
+    note: str = Field(..., min_length=1)
+
+
+async def _load_scoped(pid: str, org: Optional[str]) -> dict:
+    """Load a proposal; org-scoped — cross-org access is a 404, not a 403."""
+    record = await get_proposal(pid)
+    if not record:
+        raise HTTPException(404, "Proposal not found")
+    if org is not None and record["org_id"] != org:
+        raise HTTPException(404, "Proposal not found")
+    return record
+
+
+def _contract_shape(record: dict) -> dict:
+    return {
+        "id": record["id"],
+        "meeting_id": record["meeting_id"],
+        "meeting_title": record["meeting_title"],
+        "created_at": record["created_at"],
+        "branch": record["branch"],
+        "summary": record["summary"],
+        "files_changed": record["files_changed"],
+    }
+
+
+@router.get("/api/proposals", dependencies=[Depends(require_api_key)])
+async def list_proposals(org: str = Query(...)):
+    """List pending (open) proposals for an org."""
+    org = sanitize_org_id(org)
+    records = await list_org_proposals(org)
+    return [_contract_shape(r) for r in records if r.get("status") == "open"]
+
+
+@router.get("/api/proposals/{pid}/diff", dependencies=[Depends(require_api_key)])
+async def proposal_diff(pid: str, org: Optional[str] = Query(None)):
+    record = await _load_scoped(pid, sanitize_org_id(org) if org else None)
+    repo = org_repo_path(record["org_id"])
+    branch = record["branch"]
+    if record.get("status") == "rejected" or not await _branch_exists(repo, branch):
+        # Rejected proposals have no branch left to diff.
+        return {"proposal_id": pid, "files": []}
+
+    name_status = await _git(["diff", "--name-status", f"main...{branch}"], cwd=repo)
+    files = []
+    for line in name_status.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        code, path = parts[0], parts[-1]
+        status = "added" if code.startswith("A") else "modified"
+        before = ""
+        if not code.startswith("A"):
+            rc, out = await _run(["git", "-C", repo, "show", f"main:{path}"])
+            before = out.decode(errors="replace") if rc == 0 else ""
+        rc, out = await _run(["git", "-C", repo, "show", f"{branch}:{path}"])
+        after = out.decode(errors="replace") if rc == 0 else ""
+        patch = await _git(["diff", f"main...{branch}", "--", path], cwd=repo)
+        files.append({"path": path, "status": status,
+                      "before": before, "after": after, "patch": patch})
+    return {"proposal_id": pid, "files": files}
+
+
+@router.post("/api/proposals/{pid}/sign", dependencies=[Depends(require_api_key)])
+async def sign_proposal(pid: str, org: Optional[str] = Query(None)):
+    """Merge the proposal branch into the workspace main branch.
+
+    The ONLY path by which content reaches main. Idempotent in effect: a
+    repeat sign (or a sign after reject) returns 409 and never re-merges.
+    """
+    record = await _load_scoped(pid, sanitize_org_id(org) if org else None)
+    if record.get("status") != "open":
+        raise HTTPException(
+            409, f"Proposal already {record.get('status')}"
+                 + (f" (merge_commit {record['merge_commit']})"
+                    if record.get("merge_commit") else ""))
+
+    repo = org_repo_path(record["org_id"])
+    branch = record["branch"]
+    async with _org_lock(record["org_id"]):
+        if not await _branch_exists(repo, branch):
+            raise HTTPException(409, "Proposal branch is gone")
+        # The org repo's checkout stays on main and is never dirtied (runs use
+        # isolated clones), so a plain --no-ff merge is safe here.
+        await _git(["merge", "--no-ff", "-m",
+                    f"sign: merge proposal {pid} ({branch})", branch], cwd=repo)
+        merge_commit = await _git(["rev-parse", "HEAD"], cwd=repo)
+        record["status"] = "signed"
+        record["merge_commit"] = merge_commit
+        record["signed_at"] = _now()
+        await _save_proposal(record)
+    return {"merged": True, "merge_commit": merge_commit}
+
+
+@router.post("/api/proposals/{pid}/reject", dependencies=[Depends(require_api_key)])
+async def reject_proposal(pid: str, body: RejectRequest, org: Optional[str] = Query(None)):
+    """Close a proposal without merging: delete the branch, keep the note."""
+    record = await _load_scoped(pid, sanitize_org_id(org) if org else None)
+    if record.get("status") != "open":
+        raise HTTPException(409, f"Proposal already {record.get('status')}")
+
+    repo = org_repo_path(record["org_id"])
+    async with _org_lock(record["org_id"]):
+        if await _branch_exists(repo, record["branch"]):
+            await _git(["branch", "-D", record["branch"]], cwd=repo)
+        record["status"] = "rejected"
+        record["note"] = body.note
+        record["rejected_at"] = _now()
+        await _save_proposal(record)
+    return {"closed": True}
+
+
+# ── Internal status (visible run state — ops + regression checks) ──────────
+
+
+@router.get("/internal/ei/status")
+async def ei_status(org_id: str, meeting_id: str):
+    """Run/claim status for one meeting in one org. Internal surface."""
+    org_id = sanitize_org_id(org_id)
+    claim = await get_claim(org_id, meeting_id)
+    proposal = None
+    if claim and claim.get("proposal_id"):
+        proposal = await get_proposal(claim["proposal_id"])
+    return {"org_id": org_id, "meeting_id": meeting_id,
+            "claim": claim, "proposal": proposal}

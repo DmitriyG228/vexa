@@ -13,8 +13,10 @@ RUN chmod +x /system/bin/vexa
 
 ENV PATH="/system/bin:$PATH"
 
-# Workspace templates (copied into /workspace on first init)
-COPY features/knowledge-workspace/templates/knowledge/ /templates/knowledge/
+# Workspace templates (copied into /workspace on first init).
+# ei-lineage (#24): the old features/knowledge-workspace source was removed from
+# the tree; the committed org workspace seed is the single template source now.
+COPY services/agent-api/workspace-seed/ /templates/knowledge/
 
 # Git config for auto-commits
 RUN git config --global user.email "vexa@agent" && \

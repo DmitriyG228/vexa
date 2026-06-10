@@ -18,10 +18,12 @@ BUILD_TAG := $(VERSION)-$(shell date +%y%m%d-%H%M)
 DOCKERHUB_USER ?= vexaai
 
 # All images that get built and published.
-# agent-api remains NO-SHIP for v0.10.x (see docker-compose.yml); do not
-# promote a non-deployed image to :dev/:latest as part of public releases.
-IMAGES := api-gateway admin-api runtime-api meeting-api mcp dashboard tts-service vexa-lite
+# ei-lineage (#24): agent-api ships in compose again (meeting.completed
+# consumer + sign API), and vexa-agent is the sidecar image runtime-api
+# launches for org agent containers — both build and publish with the set.
+IMAGES := api-gateway admin-api runtime-api meeting-api mcp dashboard tts-service vexa-lite agent-api
 BOT_IMAGE := vexa-bot
+AGENT_SIDECAR_IMAGE := vexa-agent
 
 -include $(ENV_FILE)
 
@@ -171,7 +173,13 @@ build-transcript-rendering:
 	@echo "Building transcript-rendering package..."
 	@cd $(ROOT)/packages/transcript-rendering && npm install && npm run build
 
-build: check_docker build-bot-image build-transcript-rendering build-lite
+# ei-lineage (#24): the agent sidecar image (agent CLI + git) launched by
+# runtime-api's `agent` profile for org agent containers. Repo-root context.
+build-agent-image: check_docker
+	@echo "Building $(DOCKERHUB_USER)/$(AGENT_SIDECAR_IMAGE):$(BUILD_TAG)..."
+	docker build --platform linux/amd64 -t $(DOCKERHUB_USER)/$(AGENT_SIDECAR_IMAGE):$(BUILD_TAG) -f $(ROOT)/services/vexa-agent/Dockerfile $(ROOT)
+
+build: check_docker build-bot-image build-agent-image build-transcript-rendering build-lite
 	@echo "Building all images with tag: $(BUILD_TAG)"
 	@# v0.10.5.3 Pack D-1 follow-up: VEXA_VERSION + VEXA_RELEASE_DATE are
 	@# read by docker-compose.yml's dashboard service `args:` block to feed
@@ -203,6 +211,11 @@ up: check_docker preflight
 	if ! docker image inspect $$BOT_IMG > /dev/null 2>&1; then \
 		echo "Pulling bot image: $$BOT_IMG..."; \
 		docker pull $$BOT_IMG; \
+	fi; \
+	AGENT_IMG=$${AGENT_IMAGE:-$(DOCKERHUB_USER)/$(AGENT_SIDECAR_IMAGE):$$BOT_TAG}; \
+	if ! docker image inspect $$AGENT_IMG > /dev/null 2>&1; then \
+		echo "Pulling agent image: $$AGENT_IMG..."; \
+		docker pull $$AGENT_IMG || echo "  ⚠ agent image $$AGENT_IMG unavailable — org agent containers will fail until pulled"; \
 	fi; \
 	if grep -qE '^LOCAL_TRANSCRIPTION=true' $(ENV_FILE) 2>/dev/null; then \
 		echo "LOCAL_TRANSCRIPTION=true — starting transcription-service..."; \
@@ -377,7 +390,7 @@ publish: check_docker
 	fi
 	@TAG=$$(cat $(LAST_TAG_FILE)); \
 	echo "Publishing all images with tag: $$TAG"; \
-	for img in $(IMAGES) $(BOT_IMAGE); do \
+	for img in $(IMAGES) $(BOT_IMAGE) $(AGENT_SIDECAR_IMAGE); do \
 		echo "  Pushing $(DOCKERHUB_USER)/$$img:$$TAG..."; \
 		docker push $(DOCKERHUB_USER)/$$img:$$TAG; \
 		echo "  Tagging $(DOCKERHUB_USER)/$$img:dev → $$TAG"; \
@@ -398,7 +411,7 @@ promote-staging: check_docker
 		fi; \
 	fi; \
 	echo "Promoting $$TAG_TO_USE → :staging"; \
-	for img in $(IMAGES) $(BOT_IMAGE); do \
+	for img in $(IMAGES) $(BOT_IMAGE) $(AGENT_SIDECAR_IMAGE); do \
 		echo "  $(DOCKERHUB_USER)/$$img:staging → $$TAG_TO_USE"; \
 		docker pull $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE; \
 		docker tag $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE $(DOCKERHUB_USER)/$$img:staging; \
@@ -417,7 +430,7 @@ promote-latest: check_docker
 		fi; \
 	fi; \
 	echo "Promoting $$TAG_TO_USE → :latest"; \
-	for img in $(IMAGES) $(BOT_IMAGE); do \
+	for img in $(IMAGES) $(BOT_IMAGE) $(AGENT_SIDECAR_IMAGE); do \
 		echo "  $(DOCKERHUB_USER)/$$img:latest → $$TAG_TO_USE"; \
 		docker pull $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE; \
 		docker tag $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE $(DOCKERHUB_USER)/$$img:latest; \

@@ -126,7 +126,9 @@ services:
       - "127.0.0.1:${RUNTIME_API_PORT:-8090}:8090"
     environment:
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
-      - AGENT_IMAGE=${AGENT_IMAGE}
+      # ei-lineage (#24): the agent profile must resolve to a real image now
+      # that agent-api creates org agent containers through runtime-api.
+      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:${IMAGE_TAG}}
       - BROWSER_IMAGE=${BROWSER_IMAGE}
       - REDIS_URL=redis://redis:6379
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
@@ -161,46 +163,66 @@ services:
       - vexa
     restart: unless-stopped
 
-  # agent-api: NO-SHIP for 0.10 — not included in release
-  # agent-api:
-  #   build:
-  #     context: ../..
-  #     dockerfile: services/agent-api/Dockerfile
-  #   image: vexaai/agent-api:${IMAGE_TAG}
-  #   ports:
-  #     - "${AGENT_API_PORT:-8100}:8100"
-  #   environment:
-  #     - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
-  #     - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:${IMAGE_TAG}}
-  #     - STORAGE_BACKEND=s3
-  #     - S3_ENDPOINT=http://minio:9000
-  #     - S3_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
-  #     - S3_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
-  #     - S3_BUCKET=${MINIO_BUCKET:-vexa}
-  #     - CLAUDE_CREDENTIALS_PATH=${CLAUDE_CREDENTIALS_PATH}
-  #     - CLAUDE_JSON_PATH=${CLAUDE_JSON_PATH}
-  #     - IDLE_TIMEOUT=${IDLE_TIMEOUT:-300}
-  #     - REDIS_URL=redis://redis:6379
-  #     - RUNTIME_API_URL=http://runtime-api:8090
-  #     - ADMIN_API_URL=http://admin-api:8001
-  #     - ADMIN_API_TOKEN=${ADMIN_TOKEN:-vexa-admin-token}
-  #     - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
-  #     - AGENT_API_INTERNAL_URL=http://agent-api:8100
-  #     - API_KEY=${BOT_API_TOKEN:-}
-  #     - BOT_API_TOKEN=${BOT_API_TOKEN:-}
-  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock
-  #   depends_on:
-  #     minio-init:
-  #       condition: service_completed_successfully
-  #     redis:
-  #       condition: service_started
-  #     runtime-api:
-  #       condition: service_started
-  #   networks:
-  #     - vexa
-  #   restart: unless-stopped
+  # agent-api: re-enabled by pack ei-lineage (#24) — consumes meeting.completed
+  # from POST_MEETING_HOOKS, owns the per-org knowledge workspaces (git repos on
+  # the agent-workspaces volume) and serves the sign API (frozen contract v1).
+  # Safe by default: the org-level EI flag (user.data.ei.enabled) is OFF unless
+  # an admin turns it on, so no agent runs (and no token burn) happen on
+  # existing deployments.
+  agent-api:
+    build:
+      context: ../..
+      dockerfile: services/agent-api/Dockerfile
+    image: vexaai/agent-api:${IMAGE_TAG}
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:${AGENT_API_PORT:-8100}:8100"
+    environment:
+      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
+      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:${IMAGE_TAG}}
+      - STORAGE_BACKEND=s3
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - S3_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - S3_BUCKET=${MINIO_BUCKET:-vexa}
+      - CLAUDE_CREDENTIALS_PATH=${CLAUDE_CREDENTIALS_PATH}
+      - CLAUDE_JSON_PATH=${CLAUDE_JSON_PATH}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - IDLE_TIMEOUT=${IDLE_TIMEOUT:-300}
+      - REDIS_URL=redis://redis:6379
+      - RUNTIME_API_URL=http://runtime-api:8090
+      - ADMIN_API_URL=http://admin-api:8001
+      - ADMIN_API_TOKEN=${ADMIN_TOKEN:-changeme}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - AGENT_API_INTERNAL_URL=http://agent-api:8100
+      - API_KEY=${BOT_API_TOKEN:-}
+      - BOT_API_TOKEN=${BOT_API_TOKEN:-}
+      # ei-lineage (#24)
+      - TRANSCRIPTION_COLLECTOR_URL=http://meeting-api:8080
+      - EI_WORKSPACES_PATH=/workspaces
+      - EI_AGENT_CMD=${EI_AGENT_CMD:-}
+      - EI_AGENT_TIMEOUT=${EI_AGENT_TIMEOUT:-900}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent-workspaces:/workspaces
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    init: true
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      runtime-api:
+        condition: service_started
+    networks:
+      - vexa
+    restart: unless-stopped
 
   api-gateway:
     build:
@@ -266,10 +288,11 @@ services:
       - BOT_IMAGE_NAME=${BROWSER_IMAGE}
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
       - TTS_SERVICE_URL=http://tts-service:8002
-      # agent-api is not shipped in this compose profile. Operators can opt in
-      # with POST_MEETING_HOOKS, but the default must not point at a disabled
-      # service or every completed meeting emits DNS errors before handoff.
-      - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-}
+      # ei-lineage (#24): agent-api ships in this profile again, so the default
+      # hook target is its meeting.completed consumer (the org-level EI flag,
+      # default OFF, keeps it inert). Operators can still override/extend the
+      # comma-separated target list.
+      - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-http://agent-api:8100/internal/webhooks/meeting-completed}
       - TRANSCRIPTION_COLLECTOR_URL=http://meeting-api:8080
       - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
@@ -441,6 +464,8 @@ volumes:
   minio-data:
   recordings-data:
   tts-voices:
+  # ei-lineage (#24): per-org knowledge workspaces (git repos), one dir per org.
+  agent-workspaces:
 
 networks:
   vexa:
