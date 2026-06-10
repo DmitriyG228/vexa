@@ -25,13 +25,15 @@
 source "$(dirname "$0")/../lib/common.sh"
 
 ADMIN_URL=$(state_read admin_url)
-ADMIN_TOKEN=$(state_read admin_token)
-[ -z "$ADMIN_TOKEN" ] && ADMIN_TOKEN=$(grep -E '^ADMIN_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2)
+ADMIN_TOKEN=$(state_read admin_token 2>/dev/null || true)
+if [ -z "$ADMIN_TOKEN" ]; then
+    ADMIN_TOKEN=$(grep -E '^ADMIN_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2 || true)
+fi
 ADMIN_TOKEN=${ADMIN_TOKEN:-changeme}
 
 # agent-api binds 127.0.0.1:${AGENT_API_PORT:-8100} in compose.
 if [ -z "${AGENT_API_URL:-}" ]; then
-    AGENT_PORT=$(grep -E '^AGENT_API_PORT=' "$ROOT/.env" 2>/dev/null | cut -d= -f2)
+    AGENT_PORT=$(grep -E '^AGENT_API_PORT=' "$ROOT/.env" 2>/dev/null | cut -d= -f2 || true)
     AGENT_API_URL="http://localhost:${AGENT_PORT:-8100}"
 fi
 # agent-api API_KEY = BOT_API_TOKEN (may be empty = auth disabled in dev).
@@ -91,7 +93,7 @@ create_user() {  # create_user <email> → user id
     curl -s -X POST "$ADMIN_URL/admin/users" \
         -H "X-Admin-API-Key: $ADMIN_TOKEN" -H "Content-Type: application/json" \
         -d "{\"email\":\"$1\",\"name\":\"EI Test\"}" \
-        | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))"
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true
 }
 
 set_ei() {  # set_ei <user_id> <org_id> <agent_cli ('' = remove override)>
@@ -118,7 +120,7 @@ deliver() {  # deliver <user_id> <meeting_id> [event_suffix] → response body
 
 run_status() {  # run_status <org> <meeting> → claim status string ('' if none)
     curl -s "$AGENT_API_URL/internal/ei/status?org_id=$1&meeting_id=$2" \
-        | python3 -c "import sys,json; c=json.load(sys.stdin).get('claim'); print(c.get('status','') if c else '')" 2>/dev/null
+        | python3 -c "import sys,json; c=json.load(sys.stdin).get('claim'); print(c.get('status','') if c else '')" 2>/dev/null || true
 }
 
 wait_status() {  # wait_status <org> <meeting> <want> <timeout_s>
@@ -142,7 +144,7 @@ proposals_for() {  # proposals_for <org> <meeting_id> → count
     api_curl "$AGENT_API_URL/api/proposals?org=$1" | python3 -c "
 import sys,json
 mid=int('$2')
-print(sum(1 for p in json.load(sys.stdin) if p.get('meeting_id')==mid))" 2>/dev/null
+print(sum(1 for p in json.load(sys.stdin) if p.get('meeting_id')==mid))" 2>/dev/null || echo -1
 }
 
 proposal_id_for() {  # proposal_id_for <org> <meeting_id>
@@ -150,7 +152,7 @@ proposal_id_for() {  # proposal_id_for <org> <meeting_id>
 import sys,json
 mid=int('$2')
 for p in json.load(sys.stdin):
-    if p.get('meeting_id')==mid: print(p['id']); break" 2>/dev/null
+    if p.get('meeting_id')==mid: print(p['id']); break" 2>/dev/null || true
 }
 
 # ── Setup (not steps): agent-api up + three users ─────────────────
@@ -179,7 +181,7 @@ fi
 
 # ── Step: e2e_propose ─────────────────────────────────────────────
 R=$(deliver "$UA" "$MA1")
-ST=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null)
+ST=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || true)
 if [ "$ST" != "accepted" ]; then
     step_fail e2e_propose "delivery not accepted: $R"
     exit 1
@@ -199,7 +201,7 @@ meeting = [f for f in files if f['path'].startswith('graph/kg/entities/meetings/
 entity = [f for f in files if f['path'] == 'graph/kg/entities/people/jane-doe.md' and f['status'] == 'modified']
 schema = meeting and all(s in meeting[0]['after'] for s in ('## Summary', '## Decisions', '## Action items', '[[Jane Doe]]'))
 appended = entity and '[conf:0.9] Discussed in meeting $MA1' in entity[0]['after']
-print('ok' if (meeting and entity and schema and appended) else f'bad: meeting={len(meeting)} entity={len(entity)} schema={bool(schema)} appended={bool(appended)}')" 2>/dev/null)
+print('ok' if (meeting and entity and schema and appended) else f'bad: meeting={len(meeting)} entity={len(entity)} schema={bool(schema)} appended={bool(appended)}')" 2>/dev/null || echo parse-error)
 if [ -n "$PID1" ] && [ -n "$BR_OK" ] && [ "$E2E_VERDICT" = "ok" ]; then
     step_pass e2e_propose "proposal $PID1 on meeting/$MA1: conforming artifact + entity update"
 else
@@ -208,7 +210,7 @@ fi
 
 # ── Step: idempotent ──────────────────────────────────────────────
 R2=$(deliver "$UA" "$MA1" "-dup")
-ST2=$(echo "$R2" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null)
+ST2=$(echo "$R2" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || true)
 N1=$(proposals_for "$ORGA" "$MA1")
 if [ "$ST2" = "duplicate" ] && [ "$N1" = "1" ]; then
     step_pass idempotent "duplicate delivery → '$ST2', still exactly 1 proposal"
@@ -224,9 +226,9 @@ if [ "$MAIN0" != "$SEED0" ]; then
     SIGN_OK=0; info "main moved without sign: $MAIN0 != seed $SEED0"
 fi
 SIGN_RESP=$(api_curl -X POST "$AGENT_API_URL/api/proposals/$PID1/sign?org=$ORGA")
-MERGED=$(echo "$SIGN_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if d.get('merged') and d.get('merge_commit') else 'no')" 2>/dev/null)
+MERGED=$(echo "$SIGN_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if d.get('merged') and d.get('merge_commit') else 'no')" 2>/dev/null || echo no)
 MAIN1=$(ws_git "$ORGA" rev-parse main)
-MC=$(echo "$SIGN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('merge_commit',''))" 2>/dev/null)
+MC=$(echo "$SIGN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('merge_commit',''))" 2>/dev/null || true)
 ARTIFACT_ON_MAIN=$(ws_git "$ORGA" ls-tree -r --name-only main | grep -c "graph/kg/entities/meetings/$MA1" || true)
 [ "$MERGED" = "yes" ] && [ "$MAIN1" = "$MC" ] && [ "$ARTIFACT_ON_MAIN" -ge 1 ] || { SIGN_OK=0; info "sign: merged=$MERGED main=$MAIN1 mc=$MC artifact=$ARTIFACT_ON_MAIN resp=$SIGN_RESP"; }
 RESIGN_CODE=$(api_curl -o /dev/null -w '%{http_code}' -X POST "$AGENT_API_URL/api/proposals/$PID1/sign?org=$ORGA")
@@ -240,7 +242,7 @@ if wait_status "$ORGA" "$MA2" proposed 180; then
     NONOTE_CODE=$(api_curl -o /dev/null -w '%{http_code}' -X POST "$AGENT_API_URL/api/proposals/$PID2/reject?org=$ORGA" -H "Content-Type: application/json" -d '{}')
     case "$NONOTE_CODE" in 400|422) : ;; *) SIGN_OK=0; info "reject without note returned $NONOTE_CODE (want 400/422)";; esac
     REJ=$(api_curl -X POST "$AGENT_API_URL/api/proposals/$PID2/reject?org=$ORGA" -H "Content-Type: application/json" -d '{"note":"synthetic regression reject"}')
-    CLOSED=$(echo "$REJ" | python3 -c "import sys,json; print('yes' if json.load(sys.stdin).get('closed') else 'no')" 2>/dev/null)
+    CLOSED=$(echo "$REJ" | python3 -c "import sys,json; print('yes' if json.load(sys.stdin).get('closed') else 'no')" 2>/dev/null || echo no)
     BR2=$(ws_git "$ORGA" rev-parse --verify "refs/heads/meeting/$MA2" 2>/dev/null || echo "")
     MAIN3=$(ws_git "$ORGA" rev-parse main)
     SIGN_AFTER_REJECT=$(api_curl -o /dev/null -w '%{http_code}' -X POST "$AGENT_API_URL/api/proposals/$PID2/sign?org=$ORGA")
@@ -269,7 +271,7 @@ fi
 # retry after fixing the agent → exactly one clean proposal
 set_ei "$UA" "$ORGA" "$WRITER" || CRASH_OK=0
 R3=$(deliver "$UA" "$MA3" "-retry")
-ST3=$(echo "$R3" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null)
+ST3=$(echo "$R3" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || true)
 [ "$ST3" = "accepted" ] || { CRASH_OK=0; info "retry delivery not re-claimed: $R3"; }
 if wait_status "$ORGA" "$MA3" proposed 180; then
     N3=$(proposals_for "$ORGA" "$MA3")
@@ -307,7 +309,7 @@ fi
 
 # ── Step: flag_off_inert ──────────────────────────────────────────
 RC=$(deliver "$UC" "$MC1")
-STC=$(echo "$RC" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null)
+STC=$(echo "$RC" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || true)
 sleep 2
 CLAIM_C=$(run_status "user-$UC" "$MC1")
 WS_C=$(svc_exec agent-api test -d "/workspaces/user-$UC" && echo yes || echo no)
