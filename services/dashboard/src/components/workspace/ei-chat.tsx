@@ -22,7 +22,21 @@ interface ChatMsg {
  */
 export function EiChat() {
   const searchParams = useSearchParams();
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionId, setSessionIdState] = useState<string | null>(null);
+  const setSessionId = useCallback((sid: string | null) => {
+    setSessionIdState(sid);
+    try {
+      if (sid) sessionStorage.setItem("ei-chat-session", sid);
+      else sessionStorage.removeItem("ei-chat-session");
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem("ei-chat-session");
+      if (saved) setSessionIdState(saved);
+    } catch {}
+  }, []);
   const [fileIndex, setFileIndex] = useState<FileIndex>({});
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
