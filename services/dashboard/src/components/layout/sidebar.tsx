@@ -22,6 +22,7 @@ import {
   User,
   Bug,
   GitPullRequest,
+  MessagesSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -41,6 +42,7 @@ const navigation = [
   { name: "Meetings", href: "/meetings", icon: Video },
   { name: "Proposals", href: "/proposals", icon: GitPullRequest },
   { name: "Workspace", href: "/workspace", icon: BookOpen },
+  { name: "Chat", href: "/chat", icon: MessagesSquare },
   ...(process.env.NEXT_PUBLIC_TRACKER_ENABLED === "true"
     ? [{ name: "Tracker", href: "/tracker", icon: Zap }]
     : []),

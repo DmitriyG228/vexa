@@ -18,7 +18,7 @@ import { sanitizeOrgId } from "@/lib/proposals";
 export type EiOrgResult =
   | { status: "unauthenticated" }
   | { status: "disabled" }
-  | { status: "ok"; org: string };
+  | { status: "ok"; org: string; userId: string };
 
 /**
  * Resolve the authenticated user's EI org.
@@ -78,5 +78,5 @@ export async function getAuthenticatedEiOrg(): Promise<EiOrgResult> {
 
   const org = sanitizeOrgId(ei.org_id || `user-${user.id}`);
   if (!org) return { status: "disabled" };
-  return { status: "ok", org };
+  return { status: "ok", org, userId: String(user.id) };
 }

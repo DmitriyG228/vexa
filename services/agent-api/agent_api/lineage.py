@@ -520,6 +520,21 @@ async def run_proposal(org_id: str, meeting_id, ei: dict, envelope: dict) -> Non
         await set_claim(org_id, meeting_id, CLAIM_PROPOSED, proposal_id=record["id"])
         logger.info(f"EI: proposal {record['id']} ({branch}) created for org {org_id}")
 
+        # Auto-merge mode: org opts out of the human sign gate; git history is
+        # the safety net (every change is a commit on main — revert any time).
+        if ei.get("auto_merge"):
+            async with _org_lock(org_id):
+                await _git(["merge", "--no-ff", "-m",
+                            f"auto: merge proposal {record['id']} ({branch})", branch],
+                           cwd=repo)
+                merge_commit = await _git(["rev-parse", "HEAD"], cwd=repo)
+                record["status"] = "signed"
+                record["merge_commit"] = merge_commit
+                record["signed_at"] = _now()
+                record["note"] = "auto-merged (org auto_merge)"
+                await _save_proposal(record)
+            logger.info(f"EI: proposal {record['id']} auto-merged ({merge_commit[:12]})")
+
     except Exception as e:
         logger.error(f"EI: proposal run failed for org={org_id} meeting={meeting_id}: {e}",
                      exc_info=True)
@@ -699,6 +714,133 @@ async def reject_proposal(pid: str, body: RejectRequest, org: Optional[str] = Qu
         record["rejected_at"] = _now()
         await _save_proposal(record)
     return {"closed": True}
+
+
+# ── Agent chat on the org workspace (reads + auto-committed writes) ────────
+
+
+class ChatRequest(BaseModel):
+    message: str
+    user_id: Optional[str] = None
+
+
+def _build_chat_prompt(message: str) -> str:
+    return (
+        "You are the organization's knowledge agent, working inside its git "
+        "knowledge workspace (conventions: AGENT.md; entity graph under "
+        "graph/kg/, strategy graph under graph/sg/, templates under templates/).\n\n"
+        "USER MESSAGE:\n" + message + "\n\n"
+        "Instructions:\n"
+        "1. Answer the user using the workspace content; cite files with "
+        "[[wikilinks]] or paths where relevant.\n"
+        "2. If the user asks you to record, update, research-and-store, or "
+        "restructure knowledge, edit/create files following the workspace "
+        "conventions (dated confidence-scored appends in routine-updates "
+        "regions; templates for new entities; sg/ nodes for strategy).\n"
+        "3. Write your final reply for the user as markdown to .ei/reply.md "
+        "(create the .ei directory; it is never committed).\n"
+        "4. Do not run git commands; the platform commits your changes."
+    )
+
+
+@router.post("/api/ei/chat", dependencies=[Depends(require_api_key)])
+async def ei_chat(body: ChatRequest, org: str = Query(...)):
+    """One chat turn with the org knowledge agent.
+
+    The agent runs in the org container on a working clone of workspace main;
+    any file changes are committed straight onto main (auto-commit — git
+    history is the audit/rollback mechanism). Returns the agent's reply.
+    """
+    org = sanitize_org_id(org)
+    ei = None
+    if body.user_id:
+        ei = await resolve_ei_config(body.user_id)
+    if not ei or sanitize_org_id(ei.get("org_id") or "") != org:
+        raise HTTPException(status_code=404, detail="EI not enabled for this org/user")
+
+    run_id = f"chat-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+    run_dir = os.path.join(_runs_dir(org), run_id)
+    container_run_root = f"/tmp/ei-chat-{org}-{run_id}"
+    container = None
+    touch_task = None
+    try:
+        repo = await ensure_workspace(org)
+        os.makedirs(run_dir, exist_ok=True)
+        async with _org_lock(org):
+            await _git(["clone", "--branch", "main", "--single-branch", repo,
+                        os.path.join(run_dir, "repo")])
+
+        org_env = ei.get("env") or {}
+        container = await _cm.ensure_container(
+            f"ei-{org}", session_id="ei",
+            config={"env": org_env} if org_env else {},
+        )
+        payload = _tar_dir(run_dir)
+        rc, out = await _dexec(
+            container,
+            ["sh", "-c",
+             f"rm -rf {container_run_root} && mkdir -p {container_run_root} "
+             f"&& tar -xz -C {container_run_root}"],
+            stdin=payload, timeout=120,
+        )
+        if rc != 0:
+            raise RuntimeError(f"workspace transfer failed: {out.decode(errors='replace')[:300]}")
+
+        prompt = _build_chat_prompt(body.message)
+        agent_cmd = _agent_command(ei)
+        shell_cmd = (
+            f"cd {container_run_root}/repo && EI_ORG_ID={shlex.quote(org)} "
+            f"{agent_cmd} {shlex.quote(prompt)}"
+        )
+        touch_task = asyncio.create_task(_touch_loop(container))
+        rc, out = await _dexec(container, ["bash", "-c", shell_cmd],
+                               timeout=config.EI_AGENT_TIMEOUT)
+        touch_task.cancel()
+        touch_task = None
+        if rc != 0:
+            raise RuntimeError(f"agent chat run failed (rc={rc}): "
+                               f"{out.decode(errors='replace')[-500:]}")
+
+        rc, data = await _dexec(container, ["tar", "-cz", "-C", container_run_root, "repo"],
+                                timeout=120)
+        if rc != 0:
+            raise RuntimeError("workspace retrieval failed")
+        out_dir = os.path.join(run_dir, "out")
+        _untar_to(data, out_dir)
+        out_repo = os.path.join(out_dir, "repo")
+
+        reply_path = os.path.join(out_repo, ".ei", "reply.md")
+        reply = ""
+        if os.path.isfile(reply_path):
+            with open(reply_path) as f:
+                reply = f.read().strip()
+        await _run(["rm", "-rf", os.path.join(out_repo, ".ei")])
+
+        await _git(["add", "-A"], cwd=out_repo)
+        changed = await _git(["diff", "--cached", "--name-status"], cwd=out_repo)
+        commit_sha = None
+        files = [ln for ln in changed.splitlines() if ln.strip()]
+        if files:
+            snippet = " ".join(body.message.split())[:60]
+            await _git(["commit", "-m", f"chat: {snippet}"], cwd=out_repo)
+            async with _org_lock(org):
+                await _git(["fetch", out_repo, "main"], cwd=repo)
+                await _git(["merge", "--ff-only", "FETCH_HEAD"], cwd=repo)
+                commit_sha = await _git(["rev-parse", "HEAD"], cwd=repo)
+
+        if not reply:
+            tail = out.decode(errors="replace").strip()
+            reply = tail[-1500:] if tail else "(the agent returned no reply)"
+        return {"reply": reply, "commit": commit_sha, "files_changed": len(files)}
+    finally:
+        if touch_task:
+            touch_task.cancel()
+        await _run(["rm", "-rf", run_dir])
+        if container:
+            try:
+                await _dexec(container, ["rm", "-rf", container_run_root], timeout=30)
+            except Exception:
+                pass
 
 
 # ── Org workspace read API (workspace viewer — read-only) ──────────────────

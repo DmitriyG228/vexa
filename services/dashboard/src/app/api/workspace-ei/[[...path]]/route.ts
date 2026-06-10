@@ -1,8 +1,9 @@
 /**
- * Dashboard proxy for the EI org-workspace READ API (workspace viewer).
+ * Dashboard proxy for the EI org-workspace API.
  *
- * GET /api/workspace-ei/tree              -> file list on workspace main
- * GET /api/workspace-ei/file?path=...     -> one file's content
+ * GET  /api/workspace-ei/tree             -> file list on workspace main
+ * GET  /api/workspace-ei/file?path=...    -> one file's content
+ * POST /api/workspace-ei/chat {message}   -> one agent chat turn (auto-commit)
  *
  * Same tenancy rule as the proposals proxy: the org is ALWAYS resolved
  * server-side from the authenticated dashboard session; any client-supplied
@@ -44,6 +45,51 @@ export async function GET(req: NextRequest, ctx: Ctx): Promise<Response> {
 
   const resp = await fetch(target.toString(), {
     headers: AGENT_API_TOKEN ? { "X-API-Key": AGENT_API_TOKEN } : {},
+    cache: "no-store",
+  });
+  const text = await resp.text();
+  try {
+    return Response.json(JSON.parse(text), { status: resp.status });
+  } catch {
+    return new Response(text, { status: resp.status });
+  }
+}
+
+export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
+  const auth = await getAuthenticatedEiOrg();
+  if (auth.status === "unauthenticated") {
+    return Response.json({ detail: "Not authenticated" }, { status: 401 });
+  }
+  if (auth.status === "disabled") {
+    return Response.json(
+      { detail: "Enterprise Intelligence is not enabled for this account" },
+      { status: 404 }
+    );
+  }
+  const { path = [] } = await ctx.params;
+  if (path.join("/") !== "chat") {
+    return Response.json({ detail: "Not found" }, { status: 404 });
+  }
+  let body: { message?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ detail: "Invalid JSON" }, { status: 400 });
+  }
+  const message = (body.message || "").trim();
+  if (!message) {
+    return Response.json({ detail: "message required" }, { status: 400 });
+  }
+  const target = new URL(`${AGENT_API_URL}/api/ei/chat`);
+  target.searchParams.set("org", auth.org);
+  const resp = await fetch(target.toString(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(AGENT_API_TOKEN ? { "X-API-Key": AGENT_API_TOKEN } : {}),
+    },
+    // user_id resolved server-side from the session — never client-supplied
+    body: JSON.stringify({ message, user_id: auth.userId }),
     cache: "no-store",
   });
   const text = await resp.text();
