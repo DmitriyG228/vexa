@@ -21,6 +21,7 @@ import {
   Webhook,
   User,
   Bug,
+  GitPullRequest,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -38,6 +39,7 @@ interface SidebarProps {
 
 const navigation = [
   { name: "Meetings", href: "/meetings", icon: Video },
+  { name: "Proposals", href: "/proposals", icon: GitPullRequest },
   ...(process.env.NEXT_PUBLIC_TRACKER_ENABLED === "true"
     ? [{ name: "Tracker", href: "/tracker", icon: Zap }]
     : []),
