@@ -722,6 +722,7 @@ async def reject_proposal(pid: str, body: RejectRequest, org: Optional[str] = Qu
 class ChatRequest(BaseModel):
     message: str
     user_id: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 def _extract_agent_reply(stdout: str) -> Optional[str]:
@@ -753,11 +754,16 @@ def _extract_agent_reply(stdout: str) -> Optional[str]:
     return None
 
 
-def _build_chat_prompt(message: str) -> str:
+def _build_chat_prompt(message: str, history: str = "") -> str:
+    history_block = (
+        "CONVERSATION SO FAR (from the session log; continue it):\n" + history + "\n\n"
+        if history.strip() else ""
+    )
     return (
         "You are the organization's knowledge agent, working inside its git "
         "knowledge workspace (conventions: AGENT.md; entity graph under "
         "graph/kg/, strategy graph under graph/sg/, templates under templates/).\n\n"
+        + history_block +
         "USER MESSAGE:\n" + message + "\n\n"
         "Instructions:\n"
         "1. Answer the user using the workspace content; cite files with "
@@ -788,6 +794,9 @@ async def ei_chat(body: ChatRequest, org: str = Query(...)):
     if not ei or sanitize_org_id(ei.get("org_id") or "") != org:
         raise HTTPException(status_code=404, detail="EI not enabled for this org/user")
 
+    session_id = re.sub(r"[^a-zA-Z0-9_-]", "", body.session_id or "") or \
+        f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+    chat_rel = f"chats/{session_id}.md"
     run_id = f"chat-{int(time.time())}-{uuid.uuid4().hex[:6]}"
     run_dir = os.path.join(_runs_dir(org), run_id)
     container_run_root = f"/tmp/ei-chat-{org}-{run_id}"
@@ -816,7 +825,12 @@ async def ei_chat(body: ChatRequest, org: str = Query(...)):
         if rc != 0:
             raise RuntimeError(f"workspace transfer failed: {out.decode(errors='replace')[:300]}")
 
-        prompt = _build_chat_prompt(body.message)
+        history = ""
+        hist_path = os.path.join(run_dir, "repo", chat_rel)
+        if os.path.isfile(hist_path):
+            with open(hist_path) as f:
+                history = f.read()[-6000:]
+        prompt = _build_chat_prompt(body.message, history)
         agent_cmd = _agent_command(ei)
         shell_cmd = (
             f"cd {container_run_root}/repo && EI_ORG_ID={shlex.quote(org)} "
@@ -846,10 +860,28 @@ async def ei_chat(body: ChatRequest, org: str = Query(...)):
                 reply = f.read().strip()
         await _run(["rm", "-rf", os.path.join(out_repo, ".ei")])
 
+        if not reply:
+            stdout_text = out.decode(errors="replace")
+            reply = _extract_agent_reply(stdout_text) or ""
+        if not reply:
+            reply = "(the agent returned no reply)"
+
+        # Append this turn to the session log — chats are workspace files too.
+        now = _now()
+        chat_abs = os.path.join(out_repo, chat_rel)
+        os.makedirs(os.path.dirname(chat_abs), exist_ok=True)
+        new_file = not os.path.isfile(chat_abs)
+        with open(chat_abs, "a") as f:
+            if new_file:
+                f.write(f"# Chat {session_id}\n<!-- ei-chat v1 -->\n")
+            f.write(f"\n## You — {now}\n\n{body.message.strip()}\n")
+            f.write(f"\n## Agent — {now}\n\n{reply.strip()}\n")
+
         await _git(["add", "-A"], cwd=out_repo)
         changed = await _git(["diff", "--cached", "--name-status"], cwd=out_repo)
         commit_sha = None
         files = [ln for ln in changed.splitlines() if ln.strip()]
+        kb_files = [ln for ln in files if chat_rel not in ln]
         if files:
             snippet = " ".join(body.message.split())[:60]
             await _git(["commit", "-m", f"chat: {snippet}"], cwd=out_repo)
@@ -858,12 +890,8 @@ async def ei_chat(body: ChatRequest, org: str = Query(...)):
                 await _git(["merge", "--ff-only", "FETCH_HEAD"], cwd=repo)
                 commit_sha = await _git(["rev-parse", "HEAD"], cwd=repo)
 
-        if not reply:
-            stdout_text = out.decode(errors="replace")
-            reply = _extract_agent_reply(stdout_text) or ""
-        if not reply:
-            reply = "(the agent returned no reply)"
-        return {"reply": reply, "commit": commit_sha, "files_changed": len(files)}
+        return {"reply": reply, "commit": commit_sha,
+                "files_changed": len(kb_files), "session_id": session_id}
     finally:
         if touch_task:
             touch_task.cancel()

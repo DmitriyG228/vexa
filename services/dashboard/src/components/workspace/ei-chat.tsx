@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Loader2, Send, GitCommit, BookOpen } from "lucide-react";
 import { WikiMarkdown, FileIndex, fetchFileIndex } from "./wiki-markdown";
@@ -20,6 +21,8 @@ interface ChatMsg {
  * reads/writes the org workspace; every write is auto-committed to git.
  */
 export function EiChat() {
+  const searchParams = useSearchParams();
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [fileIndex, setFileIndex] = useState<FileIndex>({});
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
@@ -39,6 +42,39 @@ export function EiChat() {
     loadIndex();
   }, [loadIndex]);
 
+  useEffect(() => {
+    const reset = () => {
+      setMessages([]);
+      setPanelFile(null);
+      setSessionId(null);
+    };
+    window.addEventListener("ei-chat-new", reset);
+    return () => window.removeEventListener("ei-chat-new", reset);
+  }, []);
+
+  // Restore a past session: /chat?session=<id> loads chats/<id>.md from the workspace.
+  useEffect(() => {
+    const sid = searchParams.get("session");
+    if (!sid || sid === sessionId) return;
+    fetch(`/api/workspace-ei/file?path=${encodeURIComponent(`chats/${sid}.md`)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((d) => {
+        const text: string = d.content || "";
+        const parts = text.split(/^## (You|Agent) — .*$/m);
+        const msgs: ChatMsg[] = [];
+        for (let i = 1; i < parts.length; i += 2) {
+          const role = parts[i] === "You" ? "user" : "agent";
+          const body = (parts[i + 1] || "").trim();
+          if (body) msgs.push({ role: role as ChatMsg["role"], text: body });
+        }
+        setMessages(msgs);
+        setSessionId(sid);
+        setPanelFile(null);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const send = async () => {
     const message = input.trim();
     if (!message || busy) return;
@@ -49,7 +85,7 @@ export function EiChat() {
       const resp = await fetch("/api/workspace-ei/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, session_id: sessionId }),
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
@@ -62,6 +98,7 @@ export function EiChat() {
           filesChanged: data.files_changed,
         },
       ]);
+      if (data.session_id && data.session_id !== sessionId) setSessionId(data.session_id);
       if (data.commit) loadIndex();
     } catch (e) {
       setMessages((m) => [
