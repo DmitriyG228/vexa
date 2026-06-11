@@ -33,6 +33,72 @@ import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import { VersionChip } from "@/components/version-chip";
 import { withBasePath } from "@/lib/base-path";
 
+type WsNode = { name: string; path: string; children?: WsNode[] };
+
+function buildWsTree(paths: string[]): WsNode[] {
+  const root: WsNode[] = [];
+  for (const p of [...paths].sort()) {
+    if (p.split("/").pop()?.startsWith(".")) continue;
+    const parts = p.split("/");
+    let level = root;
+    for (let i = 0; i < parts.length; i++) {
+      const isFile = i === parts.length - 1;
+      const full = parts.slice(0, i + 1).join("/");
+      let node = level.find((n) => n.name === parts[i]);
+      if (!node) {
+        node = { name: parts[i], path: full, children: isFile ? undefined : [] };
+        level.push(node);
+      }
+      if (!isFile) level = node.children!;
+    }
+  }
+  const dirsFirst = (nodes: WsNode[]): WsNode[] =>
+    [...nodes.filter((n) => n.children), ...nodes.filter((n) => !n.children)].map((n) =>
+      n.children ? { ...n, children: dirsFirst(n.children) } : n
+    );
+  return dirsFirst(root);
+}
+
+function WsTree({
+  nodes,
+  depth,
+  onPick,
+}: {
+  nodes: WsNode[];
+  depth: number;
+  onPick?: () => void;
+}) {
+  return (
+    <>
+      {nodes.map((n) =>
+        n.children ? (
+          <details key={n.path} open={depth < 1} className="select-none">
+            <summary
+              className="cursor-pointer list-none rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1"
+              style={{ paddingLeft: `${depth * 12 + 8}px` }}
+            >
+              <span className="opacity-60">▸</span>
+              {n.name}
+            </summary>
+            <WsTree nodes={n.children} depth={depth + 1} onPick={onPick} />
+          </details>
+        ) : (
+          <Link
+            key={n.path}
+            href={`/workspace?file=${encodeURIComponent(n.path)}`}
+            onClick={onPick}
+            title={n.path}
+            className="block truncate rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            style={{ paddingLeft: `${depth * 12 + 20}px` }}
+          >
+            {n.name}
+          </Link>
+        )
+      )}
+    </>
+  );
+}
+
 interface SidebarProps {
   isOpen?: boolean;
   onClose?: () => void;
@@ -144,7 +210,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
     fetch("/api/workspace-ei/tree")
       .then((r) => (r.ok ? r.json() : { files: [] }))
       .then((d) =>
-        setWsFiles(((d.files as string[]) || []).filter((f) => f.endsWith(".md")).slice(0, 40))
+        setWsFiles(((d.files as string[]) || []).slice(0, 300))
       )
       .catch(() => {});
   }, [pathname]);
@@ -313,21 +379,11 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
               </button>
             )}
             {pathname.startsWith("/workspace") && wsFiles.length > 0 && (
-              <div className="space-y-0.5 max-h-64 overflow-y-auto">
+              <div className="max-h-[50vh] overflow-y-auto">
                 <p className="px-3 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
                   Files
                 </p>
-                {wsFiles.map((f) => (
-                  <Link
-                    key={f}
-                    href={`/workspace?file=${encodeURIComponent(f)}`}
-                    onClick={onClose}
-                    title={f}
-                    className="block truncate rounded px-3 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  >
-                    {f.split("/").pop()}
-                  </Link>
-                ))}
+                <WsTree nodes={buildWsTree(wsFiles)} depth={0} onPick={onClose} />
               </div>
             )}
           </div>

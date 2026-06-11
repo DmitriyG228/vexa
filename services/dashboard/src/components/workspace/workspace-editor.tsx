@@ -243,8 +243,8 @@ export function WorkspaceEditor() {
 
   return (
     <div className="flex h-full">
-      {/* File tree sidebar */}
-      <div className="w-56 border-r flex flex-col bg-muted/30">
+      {/* File tree moved to the app sidebar (grouped by folders); pane hidden */}
+      <div className="hidden">
         <div className="flex items-center justify-between px-2 py-2 border-b">
           <div className="flex items-center gap-1">
             <FolderOpen className="h-4 w-4 text-muted-foreground" />
@@ -372,7 +372,7 @@ export function WorkspaceEditor() {
           <div className="flex items-center justify-center h-full text-muted-foreground">
             <div className="text-center">
               <FolderOpen className="h-10 w-10 mx-auto mb-2" />
-              <p className="text-sm">Select a file to read</p>
+              <p className="text-sm">Select a file from the sidebar</p>
               <p className="text-xs mt-1">The agent updates this workspace via approved Proposals</p>
             </div>
           </div>
