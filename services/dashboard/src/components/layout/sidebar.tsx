@@ -222,7 +222,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
     fetch("/api/workspace-ei/tree")
       .then((r) => (r.ok ? r.json() : { files: [] }))
       .then((d) =>
-        setWsFiles(((d.files as string[]) || []).slice(0, 300))
+        setWsFiles((d.files as string[]) || [])
       )
       .catch(() => {});
   }, [pathname]);
