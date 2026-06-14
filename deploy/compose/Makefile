@@ -155,8 +155,14 @@ check_docker:
 
 # --- Build ---
 build-bot-image: check_docker
+	@# 0.11 bricks: the bot consumes @vexa/* packages and its runtime stage
+	@# inherits the meet-join brick env base. Build that base first, then build
+	@# via the brick-aware core/Dockerfile with the REPO ROOT as context (the old
+	@# services/vexa-bot/Dockerfile predates bricks and never vendors packages/*).
+	@echo "Building brick env base vexa/meet-join-env:dev..."
+	docker build --platform linux/amd64 -f $(ROOT)/packages/meet-join/Dockerfile.env -t vexa/meet-join-env:dev $(ROOT)/packages/meet-join
 	@echo "Building $(DOCKERHUB_USER)/$(BOT_IMAGE):$(BUILD_TAG)..."
-	docker build --platform linux/amd64 -t $(DOCKERHUB_USER)/$(BOT_IMAGE):$(BUILD_TAG) -f $(ROOT)/services/vexa-bot/Dockerfile $(ROOT)/services/vexa-bot
+	docker build --platform linux/amd64 -t $(DOCKERHUB_USER)/$(BOT_IMAGE):$(BUILD_TAG) -f $(ROOT)/services/vexa-bot/core/Dockerfile $(ROOT)
 
 build-lite: check_docker
 	@echo "Building $(DOCKERHUB_USER)/vexa-lite:$(BUILD_TAG)..."
