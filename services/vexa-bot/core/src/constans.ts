@@ -87,8 +87,26 @@ export const CDP_DEBUG_ARGS = [
   '--remote-allow-origins=*',
 ];
 
-export function getBrowserArgs(voiceAgentEnabled: boolean = false): string[] {
-  const args = [...baseBrowserArgs];
+// Flags Google Meet's anti-abuse fingerprints as automation. The ISOLATED
+// meet-join module (packages/meet-join, scripts/debug-join.ts) joins reliably
+// WITHOUT them, and getAuthenticatedBrowserArgs already omits them — but the
+// default (transcription) path kept them and drew a reCAPTCHA + "you can't join
+// this video call". --in-process-gpu is a Zoom-Web CPU optimization (cycle
+// 260426: 4.4 -> 1.15 cores) with no benefit on Meet, so it's dropped there too.
+const GOOGLE_MEET_DETECTION_FLAGS = new Set([
+  '--incognito',
+  '--disable-features=IsolateOrigins,site-per-process',
+  '--disable-site-isolation-trials',
+  '--in-process-gpu',
+]);
+
+export function getBrowserArgs(voiceAgentEnabled: boolean = false, platform?: string): string[] {
+  let args = [...baseBrowserArgs];
+  // Google Meet: strip the automation-fingerprint flags so the launch matches the
+  // isolated meet-join module that joins without tripping bot detection.
+  if (platform === 'google_meet') {
+    args = args.filter((a) => !GOOGLE_MEET_DETECTION_FLAGS.has(a));
+  }
   // Opt-in CDP exposure for the hot-debug loop. Inert unless BOT_DEBUG_CDP=true.
   if (process.env.BOT_DEBUG_CDP === 'true') {
     args.push(

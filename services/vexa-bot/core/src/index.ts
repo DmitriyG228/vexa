@@ -2458,7 +2458,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
 
     browserInstance = await chromium.launch({
       headless: false,
-      args: getBrowserArgs(!!botConfig.voiceAgentEnabled),
+      args: getBrowserArgs(!!botConfig.voiceAgentEnabled, botConfig.platform),
     });
 
     // Create a new page with permissions and viewport for non-Teams
