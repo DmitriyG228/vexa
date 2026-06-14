@@ -48,12 +48,21 @@ export function EiChat() {
   const [attachments, setAttachments] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
   const { upload, uploading } = useWorkspaceUpload("uploads");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
+
+  // Auto-resize the input to its content (capped; then scrolls).
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, Math.round(window.innerHeight * 0.4)) + "px";
+  }, [input]);
 
   const loadIndex = useCallback(async () => {
     setFileIndex(await fetchFileIndex());
@@ -326,6 +335,7 @@ export function EiChat() {
             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
           </Button>
           <textarea
+            ref={taRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -335,8 +345,8 @@ export function EiChat() {
               }
             }}
             placeholder="Ask the knowledge agent… (Enter to send, Shift+Enter for newline)"
-            rows={2}
-            className="flex-1 resize-none rounded-md border bg-background p-2 text-sm focus:outline-none"
+            rows={1}
+            className="flex-1 resize-none rounded-md border bg-background p-2 text-sm leading-relaxed focus:outline-none max-h-[40vh] overflow-y-auto"
             disabled={busy}
           />
           <Button onClick={send} disabled={busy || (!input.trim() && attachments.length === 0)} className="self-end gap-1">
