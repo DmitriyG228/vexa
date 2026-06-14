@@ -49,7 +49,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -1169,6 +1169,44 @@ async def ei_chat_rename(body: RenameChatRequest, org: str = Query(...)):
         await _git(["add", rel], cwd=repo)
         await _git(["commit", "-m", f"chat: rename {sid} -> {title[:40]}"], cwd=repo)
     return {"renamed": True, "id": sid, "title": title}
+
+
+# ── Workspace file upload (drop to add files; committed) ───────────────────
+
+
+@router.post("/api/ei/workspace/upload", dependencies=[Depends(require_api_key)])
+async def ei_workspace_upload(
+    org: str = Query(...),
+    dir: str = Query("uploads"),
+    files: list[UploadFile] = File(...),
+):
+    """Write one or more uploaded files into the org workspace under <dir> and
+    commit (auto-commit model). Returns the committed relative paths."""
+    org = sanitize_org_id(org)
+    safe_dir = re.sub(r"[^a-zA-Z0-9_/-]", "", dir).strip("/") or "uploads"
+    if ".." in safe_dir.split("/"):
+        raise HTTPException(status_code=400, detail="invalid dir")
+    repo = await ensure_workspace(org)
+    written: list[str] = []
+    async with _org_lock(org):
+        for uf in files:
+            name = os.path.basename(uf.filename or "file")
+            name = re.sub(r"[^a-zA-Z0-9._ -]", "_", name).strip() or "file"
+            rel = f"{safe_dir}/{name}"
+            abspath = os.path.join(repo, rel)
+            os.makedirs(os.path.dirname(abspath), exist_ok=True)
+            data = await uf.read()
+            with open(abspath, "wb") as fh:
+                fh.write(data)
+            written.append(rel)
+        await _git(["add", "-A"], cwd=repo)
+        status = await _git(["status", "--porcelain"], cwd=repo)
+        commit = None
+        if status.strip():
+            label = ", ".join(os.path.basename(w) for w in written)[:60]
+            await _git(["commit", "-m", f"upload: {label}"], cwd=repo)
+            commit = await _git(["rev-parse", "HEAD"], cwd=repo)
+    return {"uploaded": written, "commit": commit}
 
 
 # ── Org workspace read API (workspace viewer — read-only) ──────────────────
