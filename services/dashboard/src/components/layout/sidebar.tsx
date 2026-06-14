@@ -316,14 +316,13 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                     href={m.href}
                     onClick={onClose}
                     className={cn(
-                      "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                      "flex-1 min-w-0 flex items-center justify-center rounded-md px-1.5 py-1.5 text-xs font-medium transition-colors",
                       active
                         ? "bg-background shadow-sm text-foreground"
                         : "text-muted-foreground hover:text-foreground"
                     )}
                   >
-                    <m.icon className="h-3.5 w-3.5" />
-                    {m.name}
+                    <span className="truncate">{m.name}</span>
                   </Link>
                 );
               })}
