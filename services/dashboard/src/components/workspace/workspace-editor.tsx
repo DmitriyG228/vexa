@@ -12,6 +12,8 @@ import {
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
 import { MarkdownEditor } from "./markdown-editor";
+import { WikiMarkdown, FileIndex, slugify } from "./wiki-markdown";
+import { useRouter } from "next/navigation";
 
 const AGENT_API = "/api/agent";
 // Org knowledge workspace (EI) — read-only viewer; edits go through Proposals.
@@ -106,6 +108,8 @@ function FileTreeNode({
 
 export function WorkspaceEditor() {
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const [fileIndex, setFileIndex] = useState<FileIndex>({});
   const { user } = useAuthStore();
   const userId = user?.id?.toString() || user?.email || "default";
 
@@ -128,6 +132,14 @@ export function WorkspaceEditor() {
       const data = await resp.json();
       const files: string[] = data.files || [];
       setTree(buildTree(files));
+      const idx: FileIndex = {};
+      for (const f of files) {
+        if (f.endsWith(".md")) {
+          const base = f.split("/").pop()!.replace(/\.md$/, "");
+          idx[slugify(base)] = f;
+        }
+      }
+      setFileIndex(idx);
     } catch {}
   }, [userId]);
 
@@ -354,6 +366,16 @@ export function WorkspaceEditor() {
               {isLoading ? (
                 <div className="flex items-center justify-center h-full">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : isMarkdown && READ_ONLY ? (
+                <div className="prose-none p-4 text-sm max-w-3xl">
+                  <WikiMarkdown
+                    text={content}
+                    fileIndex={fileIndex}
+                    onOpenFile={(path) =>
+                      router.push(`/workspace?file=${encodeURIComponent(path)}`)
+                    }
+                  />
                 </div>
               ) : isMarkdown ? (
                 <MarkdownEditor content={content} onChange={setContent} editable={!READ_ONLY} />
