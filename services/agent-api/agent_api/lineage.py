@@ -1013,6 +1013,7 @@ async def ei_chat_stream(body: ChatRequest, org: str = Query(...)):
                 f"{agent_cmd} {shlex.quote(prompt)}"
             )
             yield _sse({"type": "status", "text": "agent running"})
+            last_assistant = ""
             touch_task = asyncio.create_task(_touch_loop(container))
             proc = await asyncio.create_subprocess_exec(
                 "docker", "exec", container, "bash", "-c", shell_cmd,
@@ -1035,6 +1036,8 @@ async def ei_chat_stream(body: ChatRequest, org: str = Query(...)):
                     break
                 ev = _vibe_event(line.decode(errors="replace"))
                 if ev:
+                    if ev.get("type") == "assistant" and ev.get("text"):
+                        last_assistant = str(ev["text"])
                     yield _sse(ev)
             rc = await proc.wait()
             touch_task.cancel()
@@ -1057,6 +1060,8 @@ async def ei_chat_stream(body: ChatRequest, org: str = Query(...)):
                 with open(reply_path) as f:
                     reply = f.read().strip()
             await _run(["rm", "-rf", os.path.join(out_repo, ".ei")])
+            if not reply and last_assistant.strip():
+                reply = last_assistant.strip()
             if not reply:
                 reply = "(the agent returned no reply)"
 
