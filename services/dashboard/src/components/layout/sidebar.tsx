@@ -21,7 +21,6 @@ import {
   Webhook,
   User,
   Bug,
-  GitPullRequest,
   MessagesSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -112,7 +111,6 @@ const primaryModes = [
 ];
 
 const navigation = [
-  { name: "Proposals", href: "/proposals", icon: GitPullRequest },
   ...(process.env.NEXT_PUBLIC_TRACKER_ENABLED === "true"
     ? [{ name: "Tracker", href: "/tracker", icon: Zap }]
     : []),
@@ -199,7 +197,6 @@ function BillingStatus() {
 
 export function Sidebar({ isOpen, onClose }: SidebarProps) {
   // Contextual sidebar data (per primary mode)
-  const [proposalsCount, setProposalsCount] = useState(0);
   const [wsFiles, setWsFiles] = useState<string[]>([]);
   const [chatSessions, setChatSessions] = useState<{ id: string; title: string }[]>([]);
 
@@ -220,13 +217,6 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
     fetch("/api/workspace-ei/sessions")
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setChatSessions(Array.isArray(d) ? d : []))
-      .catch(() => {});
-  }, [pathname]);
-
-  useEffect(() => {
-    fetch("/api/proposals")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setProposalsCount(Array.isArray(d) ? d.length : 0))
       .catch(() => {});
   }, [pathname]);
 
@@ -410,11 +400,6 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                   >
                     <item.icon className="h-5 w-5" />
                     {item.name}
-                    {item.href === "/proposals" && proposalsCount > 0 && (
-                      <span className="ml-auto rounded-full bg-primary/15 px-2 text-xs text-primary">
-                        {proposalsCount}
-                      </span>
-                    )}
                   </Link>
                 );
               })}
