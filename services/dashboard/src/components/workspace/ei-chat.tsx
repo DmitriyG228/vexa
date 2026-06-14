@@ -71,6 +71,8 @@ export function EiChat() {
 
   // Persist the rendered conversation so a reload restores it instantly.
   useEffect(() => {
+    // Never overwrite a good cache with an empty array (mount race / pre-hydrate).
+    if (messages.length === 0) return;
     try {
       sessionStorage.setItem(
         "ei-chat-cache",
