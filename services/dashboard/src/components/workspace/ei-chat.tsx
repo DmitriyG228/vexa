@@ -199,10 +199,10 @@ export function EiChat() {
   };
 
   return (
-    <div className="flex h-full relative">
+    <div className="flex h-full min-h-0 relative overflow-hidden">
       {/* Center: chat */}
       <div
-        className={`flex flex-col flex-1 min-w-0 relative ${dragOver ? "ring-2 ring-primary ring-inset" : ""}`}
+        className={`flex flex-col flex-1 min-w-0 min-h-0 relative ${dragOver ? "ring-2 ring-primary ring-inset" : ""}`}
         onDragOver={(e) => {
           e.preventDefault();
           setDragOver(true);
@@ -229,7 +229,7 @@ export function EiChat() {
           </span>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
           {messages.length === 0 && (
             <div className="text-center text-muted-foreground text-sm mt-12">
               <p>Ask about your meetings and knowledge base, or tell the agent</p>
@@ -348,7 +348,7 @@ export function EiChat() {
 
       {/* Right: contextual file panel (overlay on mobile, column on desktop) */}
       {panelFile && (
-        <div className="absolute inset-0 z-20 md:static md:z-auto md:w-[26rem] lg:w-[30rem] md:flex-shrink-0 border-l bg-background">
+        <div className="absolute inset-0 z-20 md:static md:z-auto md:w-[26rem] lg:w-[30rem] md:flex-shrink-0 h-full min-h-0 overflow-hidden border-l bg-background">
           <FilePanel
             path={panelFile}
             fileIndex={fileIndex}
