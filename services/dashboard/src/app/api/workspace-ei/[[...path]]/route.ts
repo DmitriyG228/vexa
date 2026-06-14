@@ -32,13 +32,15 @@ export async function GET(req: NextRequest, ctx: Ctx): Promise<Response> {
 
   const { path = [] } = await ctx.params;
   const leaf = path.join("/");
-  if (leaf !== "tree" && leaf !== "file" && leaf !== "sessions") {
+  if (leaf !== "tree" && leaf !== "file" && leaf !== "sessions" && leaf !== "git") {
     return Response.json({ detail: "Not found" }, { status: 404 });
   }
 
   const target =
     leaf === "sessions"
       ? new URL(`${AGENT_API_URL}/api/ei/chat/sessions`)
+      : leaf === "git"
+      ? new URL(`${AGENT_API_URL}/api/ei/workspace/git`)
       : new URL(`${AGENT_API_URL}/api/ei/workspace/${leaf}`);
   target.searchParams.set("org", auth.org);
   if (leaf === "file") {
@@ -71,6 +73,24 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
   }
   const { path = [] } = await ctx.params;
   const leaf = path.join("/");
+  if (leaf === "git/connect" || leaf === "git/disconnect" || leaf === "git/sync") {
+    const target = new URL(`${AGENT_API_URL}/api/ei/workspace/${leaf}`);
+    target.searchParams.set("org", auth.org);
+    let payload: unknown = {};
+    try { payload = await req.json(); } catch {}
+    const resp = await fetch(target.toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(AGENT_API_TOKEN ? { "X-API-Key": AGENT_API_TOKEN } : {}),
+      },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+    const t = await resp.text();
+    try { return Response.json(JSON.parse(t), { status: resp.status }); }
+    catch { return new Response(t, { status: resp.status }); }
+  }
   if (leaf === "upload") {
     const target = new URL(`${AGENT_API_URL}/api/ei/workspace/upload`);
     target.searchParams.set("org", auth.org);

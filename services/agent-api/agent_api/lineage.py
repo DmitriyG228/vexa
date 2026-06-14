@@ -281,6 +281,70 @@ async def list_org_proposals(org_id: str) -> list[dict]:
 # ── Workspace (seeded git repo per org) ────────────────────────────────────
 
 
+def _git_remote_cfg_path(org_id: str) -> str:
+    return os.path.join(config.EI_WORKSPACES_PATH, org_id, ".git-remote.json")
+
+
+def load_git_remote(org_id: str) -> Optional[dict]:
+    """Org-keyed git remote config (remote_url, branch, token). Token on disk
+    here is a demo seam — production resolves it from the secrets store."""
+    path = _git_remote_cfg_path(sanitize_org_id(org_id))
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def save_git_remote(org_id: str, cfg: dict) -> None:
+    path = _git_remote_cfg_path(sanitize_org_id(org_id))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(cfg, f)
+    os.chmod(path, 0o600)
+
+
+def clear_git_remote(org_id: str) -> None:
+    path = _git_remote_cfg_path(sanitize_org_id(org_id))
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
+def _auth_remote_url(remote_url: str, token: Optional[str]) -> str:
+    """Embed a token into an https remote URL for fetch/push (demo seam)."""
+    if not token or not remote_url.startswith("https://"):
+        return remote_url
+    rest = remote_url[len("https://"):]
+    # token as the username works for GitHub/GitLab/Gitea PATs
+    return f"https://{token}@{rest}"
+
+
+def _branch_of(cfg: dict) -> str:
+    return re.sub(r"[^a-zA-Z0-9._/-]", "", cfg.get("branch") or "main") or "main"
+
+
+async def push_remote(org_id: str) -> Optional[str]:
+    """Push the org repo's branch to its configured remote. No-op if unconfigured."""
+    cfg = load_git_remote(org_id)
+    if not cfg or not cfg.get("remote_url"):
+        return None
+    repo = org_repo_path(org_id)
+    if not os.path.isdir(os.path.join(repo, ".git")):
+        return None
+    branch = _branch_of(cfg)
+    auth = _auth_remote_url(cfg["remote_url"], cfg.get("token"))
+    try:
+        await _git(["push", auth, f"HEAD:{branch}"], cwd=repo, timeout=120)
+        return await _git(["rev-parse", "HEAD"], cwd=repo)
+    except RuntimeError as e:
+        logger.error(f"EI: push failed for org {org_id}: {str(e)[:300]}")
+        return None
+
+
 async def ensure_workspace(org_id: str) -> str:
     """Ensure the org's knowledge repo exists; seed it on first use.
 
@@ -288,7 +352,46 @@ async def ensure_workspace(org_id: str) -> str:
     synthetic content only). Returns the repo path.
     """
     repo = org_repo_path(org_id)
+    cfg = load_git_remote(org_id)
     async with _org_lock(org_id):
+        # Remote-connected workspace: remote is the source of truth.
+        if cfg and cfg.get("remote_url"):
+            branch = _branch_of(cfg)
+            auth = _auth_remote_url(cfg["remote_url"], cfg.get("token"))
+            if os.path.isdir(os.path.join(repo, ".git")):
+                # Pull latest (single-writer: hard-sync to remote is safe).
+                try:
+                    await _git(["fetch", auth, branch], cwd=repo, timeout=120)
+                    await _git(["reset", "--hard", "FETCH_HEAD"], cwd=repo)
+                except RuntimeError as e:
+                    logger.warning(f"EI: fetch failed org {org_id}: {str(e)[:200]}")
+                return repo
+            # First use of a connected workspace.
+            os.makedirs(os.path.dirname(repo) or repo, exist_ok=True)
+            if cfg.get("mode") == "provision":
+                # init from seed, then push to the (empty) remote.
+                os.makedirs(repo, exist_ok=True)
+                seed = config.EI_WORKSPACE_SEED_PATH
+                await _run(["cp", "-a", f"{seed}/.", repo])
+                await _git(["init", "-b", branch], cwd=repo)
+                await _git(["add", "-A"], cwd=repo)
+                await _git(["commit", "-m", f"seed: workspace for {org_id}"], cwd=repo)
+                try:
+                    await _git(["push", auth, f"HEAD:{branch}"], cwd=repo, timeout=120)
+                except RuntimeError as e:
+                    logger.error(f"EI: provision push failed org {org_id}: {str(e)[:200]}")
+            else:
+                # BYOR: clone the existing remote.
+                rc, out = await _run(["git", *_GIT_IDENT, "clone", "-b", branch,
+                                      auth, repo], timeout=180)
+                if rc != 0:
+                    raise RuntimeError(f"clone failed: {out.decode(errors='replace')[:300]}")
+            # normalize local branch name to `main` for internal ops if needed
+            cur = await _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo)
+            if cur != "main":
+                await _git(["branch", "-M", "main"], cwd=repo)
+            return repo
+
         if os.path.isdir(os.path.join(repo, ".git")):
             return repo
         seed = config.EI_WORKSPACE_SEED_PATH
@@ -534,6 +637,7 @@ async def run_proposal(org_id: str, meeting_id, ei: dict, envelope: dict) -> Non
                 record["signed_at"] = _now()
                 record["note"] = "auto-merged (org auto_merge)"
                 await _save_proposal(record)
+            await push_remote(org_id)
             logger.info(f"EI: proposal {record['id']} auto-merged ({merge_commit[:12]})")
 
     except Exception as e:
@@ -696,6 +800,7 @@ async def sign_proposal(pid: str, org: Optional[str] = Query(None)):
         record["merge_commit"] = merge_commit
         record["signed_at"] = _now()
         await _save_proposal(record)
+    await push_remote(record["org_id"])
     return {"merged": True, "merge_commit": merge_commit}
 
 
@@ -891,6 +996,7 @@ async def ei_chat(body: ChatRequest, org: str = Query(...)):
                 await _git(["fetch", out_repo, "main"], cwd=repo)
                 await _git(["merge", "--ff-only", "FETCH_HEAD"], cwd=repo)
                 commit_sha = await _git(["rev-parse", "HEAD"], cwd=repo)
+            await push_remote(org)
 
         return {"reply": reply, "commit": commit_sha,
                 "files_changed": len(kb_files), "session_id": session_id}
@@ -1088,6 +1194,7 @@ async def ei_chat_stream(body: ChatRequest, org: str = Query(...)):
                     await _git(["fetch", out_repo, "main"], cwd=repo)
                     await _git(["merge", "--ff-only", "FETCH_HEAD"], cwd=repo)
                     commit_sha = await _git(["rev-parse", "HEAD"], cwd=repo)
+                await push_remote(org_s)
 
             yield _sse({"type": "done", "reply": reply, "commit": commit_sha,
                         "files_changed": len(kb_files), "session_id": session_id})
@@ -1206,7 +1313,79 @@ async def ei_workspace_upload(
             label = ", ".join(os.path.basename(w) for w in written)[:60]
             await _git(["commit", "-m", f"upload: {label}"], cwd=repo)
             commit = await _git(["rev-parse", "HEAD"], cwd=repo)
+    await push_remote(org)
     return {"uploaded": written, "commit": commit}
+
+
+# ── Workspace git connection (connect a remote; remote is source of truth) ─
+
+
+class GitConnectRequest(BaseModel):
+    remote_url: str
+    branch: Optional[str] = "main"
+    token: Optional[str] = None
+    mode: Optional[str] = "byor"  # byor | provision
+
+
+@router.get("/api/ei/workspace/git", dependencies=[Depends(require_api_key)])
+async def ei_git_status(org: str = Query(...)):
+    org = sanitize_org_id(org)
+    cfg = load_git_remote(org)
+    if not cfg or not cfg.get("remote_url"):
+        return {"connected": False}
+    repo = org_repo_path(org)
+    head = None
+    if os.path.isdir(os.path.join(repo, ".git")):
+        try:
+            head = await _git(["rev-parse", "HEAD"], cwd=repo)
+        except RuntimeError:
+            head = None
+    return {
+        "connected": True,
+        "remote_url": cfg["remote_url"],
+        "branch": _branch_of(cfg),
+        "mode": cfg.get("mode", "byor"),
+        "has_token": bool(cfg.get("token")),
+        "head": head,
+    }
+
+
+@router.post("/api/ei/workspace/git/connect", dependencies=[Depends(require_api_key)])
+async def ei_git_connect(body: GitConnectRequest, org: str = Query(...)):
+    org = sanitize_org_id(org)
+    url = (body.remote_url or "").strip()
+    if not (url.startswith("https://") or url.startswith("http://")
+            or url.startswith("git@")):
+        raise HTTPException(status_code=400, detail="remote_url must be http(s) or ssh")
+    mode = body.mode if body.mode in ("byor", "provision") else "byor"
+    cfg = {"remote_url": url, "branch": (body.branch or "main"),
+           "token": body.token or None, "mode": mode}
+    # Connecting replaces any existing local repo with the remote's content.
+    repo = org_repo_path(org)
+    async with _org_lock(org):
+        await _run(["rm", "-rf", repo])
+    save_git_remote(org, cfg)
+    try:
+        await ensure_workspace(org)  # clones (byor) or provisions+pushes
+    except Exception as e:
+        clear_git_remote(org)
+        raise HTTPException(status_code=400, detail=f"connect failed: {str(e)[:200]}")
+    return await ei_git_status(org=org)
+
+
+@router.post("/api/ei/workspace/git/disconnect", dependencies=[Depends(require_api_key)])
+async def ei_git_disconnect(org: str = Query(...)):
+    org = sanitize_org_id(org)
+    clear_git_remote(org)
+    return {"connected": False}
+
+
+@router.post("/api/ei/workspace/git/sync", dependencies=[Depends(require_api_key)])
+async def ei_git_sync(org: str = Query(...)):
+    org = sanitize_org_id(org)
+    await ensure_workspace(org)   # fetch+reset to remote
+    head = await push_remote(org)  # then push any local-ahead (no-op normally)
+    return {"synced": True, "head": head}
 
 
 # ── Org workspace read API (workspace viewer — read-only) ──────────────────

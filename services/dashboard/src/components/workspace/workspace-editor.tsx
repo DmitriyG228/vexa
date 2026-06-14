@@ -15,6 +15,7 @@ import { MarkdownEditor } from "./markdown-editor";
 import { WikiMarkdown, FileIndex, slugify } from "./wiki-markdown";
 import { useRouter } from "next/navigation";
 import { useWorkspaceUpload } from "./use-upload";
+import { GitConnect } from "./git-connect";
 import { UploadCloud } from "lucide-react";
 
 const AGENT_API = "/api/agent";
@@ -420,12 +421,13 @@ export function WorkspaceEditor() {
             </div>
           </>
         ) : (
-          <div className="flex items-center justify-center h-full text-muted-foreground">
-            <div className="text-center">
+          <div className="flex flex-col items-center justify-center h-full gap-6 p-6 overflow-y-auto">
+            <div className="text-center text-muted-foreground">
               <FolderOpen className="h-10 w-10 mx-auto mb-2" />
               <p className="text-sm">Select a file from the sidebar</p>
-              <p className="text-xs mt-1">The agent updates this workspace via approved Proposals</p>
+              <p className="text-xs mt-1">The agent keeps this workspace up to date — every change is a git commit</p>
             </div>
+            <GitConnect onChanged={loadTree} />
           </div>
         )}
       </div>
