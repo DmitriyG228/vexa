@@ -18,6 +18,7 @@ import {
   User,
   Bug,
   MessagesSquare,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -54,6 +55,52 @@ function buildWsTree(paths: string[]): WsNode[] {
   return dirsFirst(root);
 }
 
+function WsTreeNode({
+  node,
+  depth,
+  onPick,
+}: {
+  node: WsNode;
+  depth: number;
+  onPick?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (node.children) {
+    return (
+      <div className="select-none">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="w-full cursor-pointer rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1"
+          style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        >
+          <ChevronRight
+            className={cn(
+              "h-3 w-3 shrink-0 opacity-60 transition-transform",
+              open && "rotate-90"
+            )}
+          />
+          <span className="truncate">{node.name}</span>
+        </button>
+        {open &&
+          node.children.map((c) => (
+            <WsTreeNode key={c.path} node={c} depth={depth + 1} onPick={onPick} />
+          ))}
+      </div>
+    );
+  }
+  return (
+    <Link
+      href={`/workspace?file=${encodeURIComponent(node.path)}`}
+      onClick={onPick}
+      title={node.path}
+      className="block truncate rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+      style={{ paddingLeft: `${depth * 12 + 20}px` }}
+    >
+      {node.name}
+    </Link>
+  );
+}
+
 function WsTree({
   nodes,
   depth,
@@ -65,31 +112,9 @@ function WsTree({
 }) {
   return (
     <>
-      {nodes.map((n) =>
-        n.children ? (
-          <details key={n.path} open={depth < 1} className="select-none">
-            <summary
-              className="cursor-pointer list-none rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1"
-              style={{ paddingLeft: `${depth * 12 + 8}px` }}
-            >
-              <span className="opacity-60">▸</span>
-              {n.name}
-            </summary>
-            <WsTree nodes={n.children} depth={depth + 1} onPick={onPick} />
-          </details>
-        ) : (
-          <Link
-            key={n.path}
-            href={`/workspace?file=${encodeURIComponent(n.path)}`}
-            onClick={onPick}
-            title={n.path}
-            className="block truncate rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-            style={{ paddingLeft: `${depth * 12 + 20}px` }}
-          >
-            {n.name}
-          </Link>
-        )
-      )}
+      {nodes.map((n) => (
+        <WsTreeNode key={n.path} node={n} depth={depth} onPick={onPick} />
+      ))}
     </>
   );
 }
