@@ -3,7 +3,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Loader2, Send, GitCommit, BookOpen } from "lucide-react";
+import { Loader2, Send, GitCommit, BookOpen, Paperclip, X } from "lucide-react";
+import { useWorkspaceUpload } from "./use-upload";
 import { WikiMarkdown, FileIndex, fetchFileIndex } from "./wiki-markdown";
 import { FilePanel } from "./file-panel";
 
@@ -44,6 +45,10 @@ export function EiChat() {
   const [activity, setActivity] = useState<string[]>([]);
   const [preview, setPreview] = useState("");
   const [panelFile, setPanelFile] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { upload, uploading } = useWorkspaceUpload("uploads");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -91,11 +96,27 @@ export function EiChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  const handleFiles = async (files: FileList | File[]) => {
+    const res = await upload(files);
+    if (res?.uploaded?.length) {
+      setAttachments((a) => [...a, ...res.uploaded]);
+      loadIndex();
+    }
+  };
+
   const send = async () => {
-    const message = input.trim();
-    if (!message || busy) return;
+    const baseMessage = input.trim();
+    if ((!baseMessage && attachments.length === 0) || busy) return;
+    const attachLine = attachments.length
+      ? `\n\nAttached files in the workspace (read them if relevant): ${attachments
+          .map((p) => `[[${p}]]`)
+          .join(", ")}`
+      : "";
+    const message = (baseMessage || "(see attached files)") + attachLine;
+    const display = baseMessage + (attachments.length ? `\n📎 ${attachments.length} file(s)` : "");
     setInput("");
-    setMessages((m) => [...m, { role: "user", text: message }]);
+    setAttachments([]);
+    setMessages((m) => [...m, { role: "user", text: display }]);
     setBusy(true);
     setActivity([]);
     setPreview("");
@@ -180,7 +201,26 @@ export function EiChat() {
   return (
     <div className="flex h-full relative">
       {/* Center: chat */}
-      <div className="flex flex-col flex-1 min-w-0">
+      <div
+        className={`flex flex-col flex-1 min-w-0 relative ${dragOver ? "ring-2 ring-primary ring-inset" : ""}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          if (e.dataTransfer.files?.length) handleFiles(e.dataTransfer.files);
+        }}
+      >
+        {dragOver && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-background/70 pointer-events-none">
+            <div className="rounded-lg border-2 border-dashed border-primary px-6 py-4 text-sm font-medium">
+              Drop files to attach
+            </div>
+          </div>
+        )}
         <div className="flex items-center gap-2 px-4 py-2 border-b">
           <BookOpen className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Knowledge Agent</span>
@@ -245,7 +285,46 @@ export function EiChat() {
           <div ref={bottomRef} />
         </div>
 
-        <div className="border-t p-3 flex gap-2">
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-3 pt-2">
+            {attachments.map((a, i) => (
+              <span
+                key={i}
+                className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs"
+              >
+                <Paperclip className="h-3 w-3" />
+                {a.split("/").pop()}
+                <button
+                  onClick={() => setAttachments((x) => x.filter((_, j) => j !== i))}
+                  aria-label="Remove attachment"
+                >
+                  <X className="h-3 w-3 opacity-60 hover:opacity-100" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="border-t p-3 flex gap-2 items-end">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files?.length) handleFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="self-end shrink-0"
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Attach files"
+          >
+            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+          </Button>
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -260,7 +339,7 @@ export function EiChat() {
             className="flex-1 resize-none rounded-md border bg-background p-2 text-sm focus:outline-none"
             disabled={busy}
           />
-          <Button onClick={send} disabled={busy || !input.trim()} className="self-end gap-1">
+          <Button onClick={send} disabled={busy || (!input.trim() && attachments.length === 0)} className="self-end gap-1">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             Send
           </Button>

@@ -14,6 +14,8 @@ import { useAuthStore } from "@/stores/auth-store";
 import { MarkdownEditor } from "./markdown-editor";
 import { WikiMarkdown, FileIndex, slugify } from "./wiki-markdown";
 import { useRouter } from "next/navigation";
+import { useWorkspaceUpload } from "./use-upload";
+import { UploadCloud } from "lucide-react";
 
 const AGENT_API = "/api/agent";
 // Org knowledge workspace (EI) — read-only viewer; edits go through Proposals.
@@ -110,6 +112,8 @@ export function WorkspaceEditor() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [fileIndex, setFileIndex] = useState<FileIndex>({});
+  const [wsDragOver, setWsDragOver] = useState(false);
+  const { upload: wsUpload, uploading: wsUploading } = useWorkspaceUpload("uploads");
   const { user } = useAuthStore();
   const userId = user?.id?.toString() || user?.email || "default";
 
@@ -253,8 +257,33 @@ export function WorkspaceEditor() {
   const isDirty = content !== originalContent;
   const isMarkdown = selectedFile?.endsWith(".md");
 
+  const onWsDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setWsDragOver(false);
+    if (e.dataTransfer.files?.length) {
+      const r = await wsUpload(e.dataTransfer.files);
+      if (r?.uploaded?.length) loadTree();
+    }
+  };
+
   return (
-    <div className="flex h-full">
+    <div
+      className={`flex h-full relative ${wsDragOver ? "ring-2 ring-primary ring-inset" : ""}`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setWsDragOver(true);
+      }}
+      onDragLeave={() => setWsDragOver(false)}
+      onDrop={onWsDrop}
+    >
+      {(wsDragOver || wsUploading) && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-background/70 pointer-events-none">
+          <div className="rounded-lg border-2 border-dashed border-primary px-6 py-4 text-sm font-medium flex items-center gap-2">
+            <UploadCloud className="h-4 w-4" />
+            {wsUploading ? "Uploading…" : "Drop files to add to the workspace"}
+          </div>
+        </div>
+      )}
       {/* File tree moved to the app sidebar (grouped by folders); pane hidden */}
       <div className="hidden">
         <div className="flex items-center justify-between px-2 py-2 border-b">

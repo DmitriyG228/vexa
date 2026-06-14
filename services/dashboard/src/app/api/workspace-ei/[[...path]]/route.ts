@@ -71,6 +71,29 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
   }
   const { path = [] } = await ctx.params;
   const leaf = path.join("/");
+  if (leaf === "upload") {
+    const target = new URL(`${AGENT_API_URL}/api/ei/workspace/upload`);
+    target.searchParams.set("org", auth.org);
+    const dir = req.nextUrl.searchParams.get("dir");
+    if (dir) target.searchParams.set("dir", dir);
+    const resp = await fetch(target.toString(), {
+      method: "POST",
+      headers: {
+        ...(AGENT_API_TOKEN ? { "X-API-Key": AGENT_API_TOKEN } : {}),
+        ...(req.headers.get("content-type")
+          ? { "content-type": req.headers.get("content-type") as string }
+          : {}),
+      },
+      body: await req.arrayBuffer(),
+      cache: "no-store",
+    });
+    const t = await resp.text();
+    try {
+      return Response.json(JSON.parse(t), { status: resp.status });
+    } catch {
+      return new Response(t, { status: resp.status });
+    }
+  }
   if (leaf !== "chat" && leaf !== "chat/stream" && leaf !== "sessions/rename") {
     return Response.json({ detail: "Not found" }, { status: 404 });
   }
