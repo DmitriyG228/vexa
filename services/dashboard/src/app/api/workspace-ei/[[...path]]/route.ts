@@ -32,13 +32,21 @@ export async function GET(req: NextRequest, ctx: Ctx): Promise<Response> {
 
   const { path = [] } = await ctx.params;
   const leaf = path.join("/");
-  if (leaf !== "tree" && leaf !== "file" && leaf !== "sessions" && leaf !== "git") {
+  if (
+    leaf !== "tree" &&
+    leaf !== "file" &&
+    leaf !== "sessions" &&
+    leaf !== "git" &&
+    leaf !== "attach"
+  ) {
     return Response.json({ detail: "Not found" }, { status: 404 });
   }
 
   const target =
     leaf === "sessions"
       ? new URL(`${AGENT_API_URL}/api/ei/chat/sessions`)
+      : leaf === "attach"
+      ? new URL(`${AGENT_API_URL}/api/ei/chat/attach`)
       : leaf === "git"
       ? new URL(`${AGENT_API_URL}/api/ei/workspace/git`)
       : new URL(`${AGENT_API_URL}/api/ei/workspace/${leaf}`);
@@ -47,11 +55,24 @@ export async function GET(req: NextRequest, ctx: Ctx): Promise<Response> {
     const filePath = req.nextUrl.searchParams.get("path") || "";
     target.searchParams.set("path", filePath);
   }
+  if (leaf === "attach") {
+    target.searchParams.set("session", req.nextUrl.searchParams.get("session") || "");
+  }
 
   const resp = await fetch(target.toString(), {
     headers: AGENT_API_TOKEN ? { "X-API-Key": AGENT_API_TOKEN } : {},
     cache: "no-store",
   });
+  if (leaf === "attach") {
+    return new Response(resp.body, {
+      status: resp.status,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
   const text = await resp.text();
   try {
     return Response.json(JSON.parse(text), { status: resp.status });

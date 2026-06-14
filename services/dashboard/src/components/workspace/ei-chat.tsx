@@ -40,6 +40,8 @@ export function EiChat() {
   }, []);
   const [fileIndex, setFileIndex] = useState<FileIndex>({});
   const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [resumeSid, setResumeSid] = useState<string | null>(null);
+  const resumeRef = useRef(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [activity, setActivity] = useState<string[]>([]);
@@ -62,7 +64,13 @@ export function EiChat() {
         const cached = JSON.parse(raw) as { sid: string | null; messages: ChatMsg[] };
         if (cached.messages?.length) {
           setMessages(cached.messages);
-          if (cached.sid) setSessionIdState(cached.sid);
+          if (cached.sid) {
+            setSessionIdState(cached.sid);
+            // A turn may still be running server-side (we reloaded mid-answer).
+            // Trigger a reattach: continue the live stream, or reconcile from
+            // the persisted file if it already finished.
+            setResumeSid(cached.sid);
+          }
         }
       }
     } catch {}
@@ -143,6 +151,124 @@ export function EiChat() {
     }
   };
 
+  // Parse a chats/<id>.md file into rendered messages.
+  const parseChatMd = useCallback((text: string): ChatMsg[] => {
+    const parts = text.split(/^## (You|Agent) — .*$/m);
+    const msgs: ChatMsg[] = [];
+    for (let i = 1; i < parts.length; i += 2) {
+      const role = parts[i] === "You" ? "user" : "agent";
+      const body = (parts[i + 1] || "").trim();
+      if (body) msgs.push({ role: role as ChatMsg["role"], text: body });
+    }
+    return msgs;
+  }, []);
+
+  const reconcileFromFile = useCallback(
+    async (sid: string) => {
+      try {
+        const r = await fetch(
+          `/api/workspace-ei/file?path=${encodeURIComponent(`chats/${sid}.md`)}`
+        );
+        if (!r.ok) return;
+        const d = await r.json();
+        const msgs = parseChatMd(d.content || "");
+        if (msgs.length) setMessages(msgs);
+      } catch {}
+    },
+    [parseChatMd]
+  );
+
+  // Drain an SSE chat stream to completion: update activity/preview, and append
+  // the agent reply on `done`. Returns true once `done` is seen. An `idle` event
+  // (no turn in flight on reattach) triggers opts.onIdle and stops.
+  const consumeStream = useCallback(
+    async (resp: Response, opts?: { onIdle?: () => void }): Promise<boolean> => {
+      if (!resp.body) return false;
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let finished = false;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const frames = buf.split("\n\n");
+        buf = frames.pop() || "";
+        for (const frame of frames) {
+          const line = frame.split("\n").find((l) => l.startsWith("data: "));
+          if (!line) continue;
+          let ev: Record<string, unknown>;
+          try {
+            ev = JSON.parse(line.slice(6));
+          } catch {
+            continue;
+          }
+          if (ev.type === "idle") {
+            opts?.onIdle?.();
+            return false;
+          } else if (ev.type === "status") {
+            setActivity((a) => [...a, `· ${String(ev.text || "")}`]);
+          } else if (ev.type === "tools") {
+            const calls = (ev.calls as { name: string; args: string }[]) || [];
+            setActivity((a) => [
+              ...a,
+              ...calls.map(
+                (c) => `⚙ ${c.name}${c.args ? ` — ${c.args.slice(0, 80)}` : ""}`
+              ),
+            ]);
+          } else if (ev.type === "tool_result") {
+            const sn = String(ev.snippet || "").slice(0, 80);
+            if (sn) setActivity((a) => [...a, `→ ${sn}`]);
+          } else if (ev.type === "assistant") {
+            setPreview(String(ev.text || ""));
+          } else if (ev.type === "error") {
+            throw new Error(String(ev.message || "agent error"));
+          } else if (ev.type === "done") {
+            finished = true;
+            setMessages((m) => [
+              ...m,
+              {
+                role: "agent",
+                text: String(ev.reply || "(no reply)"),
+                commit: (ev.commit as string) || null,
+                filesChanged: (ev.files_changed as number) || 0,
+              },
+            ]);
+            if (ev.session_id) setSessionId(String(ev.session_id));
+            if (ev.commit) loadIndex();
+          }
+        }
+      }
+      return finished;
+    },
+    [loadIndex, setSessionId]
+  );
+
+  // On reload, reconnect to a turn that may still be running server-side. If it
+  // finished while we were gone, the backend replies `idle` and we restore the
+  // completed answer from the persisted file. Runs once.
+  useEffect(() => {
+    if (resumeRef.current || !resumeSid) return;
+    resumeRef.current = true;
+    const sid = resumeSid;
+    (async () => {
+      setBusy(true);
+      try {
+        const resp = await fetch(
+          `/api/workspace-ei/attach?session=${encodeURIComponent(sid)}`
+        );
+        if (resp.ok)
+          await consumeStream(resp, { onIdle: () => reconcileFromFile(sid) });
+      } catch {
+        reconcileFromFile(sid);
+      } finally {
+        setBusy(false);
+        setActivity([]);
+        setPreview("");
+      }
+    })();
+  }, [resumeSid, consumeStream, reconcileFromFile]);
+
   const send = async () => {
     const baseMessage = input.trim();
     if ((!baseMessage && attachments.length === 0) || busy) return;
@@ -171,59 +297,7 @@ export function EiChat() {
           (data as { detail?: string }).detail || `HTTP ${resp.status}`
         );
       }
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      let finished = false;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const frames = buf.split("\n\n");
-        buf = frames.pop() || "";
-        for (const frame of frames) {
-          const line = frame.split("\n").find((l) => l.startsWith("data: "));
-          if (!line) continue;
-          let ev: Record<string, unknown>;
-          try {
-            ev = JSON.parse(line.slice(6));
-          } catch {
-            continue;
-          }
-          if (ev.type === "status") {
-            setActivity((a) => [...a, `· ${String(ev.text || "")}`]);
-          } else if (ev.type === "tools") {
-            const calls = (ev.calls as { name: string; args: string }[]) || [];
-            setActivity((a) => [
-              ...a,
-              ...calls.map(
-                (c) => `⚙ ${c.name}${c.args ? ` — ${c.args.slice(0, 80)}` : ""}`
-              ),
-            ]);
-          } else if (ev.type === "tool_result") {
-            const sn = String(ev.snippet || "").slice(0, 80);
-            if (sn) setActivity((a) => [...a, `→ ${sn}`]);
-          } else if (ev.type === "assistant") {
-            setPreview(String(ev.text || ""));
-          } else if (ev.type === "error") {
-            throw new Error(String(ev.message || "agent error"));
-          } else if (ev.type === "done") {
-            finished = true;
-            setMessages((m) => [
-              ...m,
-              {
-                role: "agent",
-                text: String(ev.reply || "(no reply)"),
-                commit: (ev.commit as string) || null,
-                filesChanged: (ev.files_changed as number) || 0,
-              },
-            ]);
-            if (ev.session_id && ev.session_id !== sessionId)
-              setSessionId(String(ev.session_id));
-            if (ev.commit) loadIndex();
-          }
-        }
-      }
+      const finished = await consumeStream(resp);
       if (!finished) throw new Error("stream ended unexpectedly");
     } catch (e) {
       setMessages((m) => [
