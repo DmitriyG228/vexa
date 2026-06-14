@@ -142,6 +142,7 @@ async def _run(argv: list[str], cwd: Optional[str] = None, stdin: Optional[bytes
         stdin=asyncio.subprocess.PIPE if stdin is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "true"},
     )
     try:
         out, _ = await asyncio.wait_for(proc.communicate(input=stdin), timeout=timeout)
@@ -1369,7 +1370,10 @@ async def ei_git_connect(body: GitConnectRequest, org: str = Query(...)):
         await ensure_workspace(org)  # clones (byor) or provisions+pushes
     except Exception as e:
         clear_git_remote(org)
-        raise HTTPException(status_code=400, detail=f"connect failed: {str(e)[:200]}")
+        msg = str(e)
+        if "could not read Username" in msg or "Authentication failed" in msg or "terminal prompts disabled" in msg:
+            msg = "authentication required — provide an access token with repo read/write access"
+        raise HTTPException(status_code=400, detail=f"connect failed: {msg[:200]}")
     return await ei_git_status(org=org)
 
 
