@@ -8,13 +8,9 @@ import { getDocsUrl, getWebappUrl } from "@/lib/docs/webapp-url";
 import {
   Video,
   Plus,
-  Settings,
   X,
-  Users,
   Shield,
-  LogOut,
   Lock,
-  Bot,
   BookOpen,
   Zap,
   CreditCard,
@@ -114,12 +110,6 @@ const navigation = [
   ...(process.env.NEXT_PUBLIC_TRACKER_ENABLED === "true"
     ? [{ name: "Tracker", href: "/tracker", icon: Zap }]
     : []),
-];
-
-const adminNavigation = [
-  { name: "Users", href: "/admin/users", icon: Users },
-  { name: "Bots", href: "/admin/bots", icon: Bot },
-  { name: "Settings", href: "/settings", icon: Settings },
 ];
 
 // IS_HOSTED is determined at runtime via /api/config, not build time
@@ -222,7 +212,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
 
   const router = useRouter();
   const openJoinModal = useJoinModalStore((state) => state.openModal);
-  const { isAdminAuthenticated, logout: adminLogout } = useAdminAuthStore();
+  const { isAdminAuthenticated } = useAdminAuthStore();
   const [showAdminAuthModal, setShowAdminAuthModal] = useState(false);
   const { config } = useRuntimeConfig();
   const isHosted = config?.hostedMode ?? false;
@@ -245,23 +235,10 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
     onClose?.();
   };
 
-  const handleAdminClick = (href: string) => {
-    if (isAdminAuthenticated) {
-      router.push(href);
-      onClose?.();
-    } else {
-      setShowAdminAuthModal(true);
-    }
-  };
-
   const handleAdminAuthSuccess = () => {
     // Redirect to admin after successful auth
     router.push("/admin/users");
     onClose?.();
-  };
-
-  const handleAdminLogout = () => {
-    adminLogout();
   };
 
   return (
@@ -403,61 +380,6 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                   </Link>
                 );
               })}
-              {/* Admin Section */}
-              <div className="mt-6 pt-4 border-t">
-                <div className="flex items-center justify-between px-3 mb-2">
-                  <div className="flex items-center gap-2">
-                    <Shield className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                      Admin
-                    </span>
-                  </div>
-                  {isAdminAuthenticated && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6"
-                      onClick={handleAdminLogout}
-                      title="Logout from admin"
-                    >
-                      <LogOut className="h-3 w-3 text-muted-foreground" />
-                    </Button>
-                  )}
-                </div>
-
-                {isAdminAuthenticated ? (
-                  // Show admin navigation when authenticated
-                  adminNavigation.map((item) => {
-                    const isActive = pathname.startsWith(item.href);
-
-                    return (
-                      <Link
-                        key={item.name}
-                        href={item.href}
-                        onClick={onClose}
-                        className={cn(
-                          "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                          isActive
-                            ? "bg-primary text-primary-foreground"
-                            : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                        )}
-                      >
-                        <item.icon className="h-5 w-5" />
-                        {item.name}
-                      </Link>
-                    );
-                  })
-                ) : (
-                  // Show login prompt when not authenticated
-                  <button
-                    onClick={() => setShowAdminAuthModal(true)}
-                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  >
-                    <Lock className="h-5 w-5" />
-                    <span>Unlock Admin</span>
-                  </button>
-                )}
-              </div>
             </nav>
           </ScrollArea>
 
@@ -498,6 +420,17 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                 className="rounded-md p-2 text-muted-foreground hover:bg-accent">
                 <Bug className="h-4 w-4" />
               </a>
+              {isAdminAuthenticated ? (
+                <Link href="/admin/users" onClick={onClose} title="Admin"
+                  className={cn("rounded-md p-2 hover:bg-accent", pathname.startsWith("/admin") ? "text-foreground" : "text-muted-foreground")}>
+                  <Shield className="h-4 w-4" />
+                </Link>
+              ) : (
+                <button onClick={() => setShowAdminAuthModal(true)} title="Unlock Admin"
+                  className="rounded-md p-2 text-muted-foreground hover:bg-accent">
+                  <Lock className="h-4 w-4" />
+                </button>
+              )}
             </div>
             <div className="px-3">
               <div className="flex items-center gap-1.5">
