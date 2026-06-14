@@ -52,6 +52,33 @@ export function EiChat() {
   const { upload, uploading } = useWorkspaceUpload("uploads");
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Instant restore on reload: hydrate the last conversation from sessionStorage
+  // synchronously (no network), so the chat paints immediately. The session-file
+  // fetch below then reconciles against the source of truth.
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("ei-chat-cache");
+      if (raw) {
+        const cached = JSON.parse(raw) as { sid: string | null; messages: ChatMsg[] };
+        if (cached.messages?.length) {
+          setMessages(cached.messages);
+          if (cached.sid) setSessionIdState(cached.sid);
+        }
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist the rendered conversation so a reload restores it instantly.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        "ei-chat-cache",
+        JSON.stringify({ sid: sessionId, messages })
+      );
+    } catch {}
+  }, [messages, sessionId]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
@@ -77,6 +104,7 @@ export function EiChat() {
       setMessages([]);
       setPanelFile(null);
       setSessionId(null);
+      try { sessionStorage.removeItem("ei-chat-cache"); } catch {}
     };
     window.addEventListener("ei-chat-new", reset);
     return () => window.removeEventListener("ei-chat-new", reset);
