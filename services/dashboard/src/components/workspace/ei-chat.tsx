@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Loader2, Send, GitCommit, BookOpen, Paperclip, X } from "lucide-react";
+import { Loader2, Send, GitCommit, BookOpen, Paperclip, X, Radio, Calendar } from "lucide-react";
 import { useWorkspaceUpload } from "./use-upload";
-import { WikiMarkdown, FileIndex, fetchFileIndex } from "./wiki-markdown";
+import { WikiMarkdown, FileIndex, fetchFileIndex, slugify } from "./wiki-markdown";
 import { FilePanel } from "./file-panel";
+import { useMeetings, isActiveStatus, MeetingItem } from "./use-meetings";
+import { MentionMenu, MentionOption } from "./mention-menu";
 
 interface ChatMsg {
   role: "user" | "agent";
@@ -53,6 +55,44 @@ export function EiChat() {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const { upload, uploading } = useWorkspaceUpload("uploads");
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Meeting context: live meetings auto-attach as a removable pill; @-mention
+  // pulls any meeting (live/past) or workspace file into the turn.
+  const { meetings, active: activeMeetings } = useMeetings();
+  const [attachedMeetings, setAttachedMeetings] = useState<MeetingItem[]>([]);
+  const [dismissedMeetingIds, setDismissedMeetingIds] = useState<Set<string>>(new Set());
+  // @-mention typeahead state (caret-anchored token before the cursor).
+  const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+
+  // Auto-attach live meetings (unless the user dismissed them this session).
+  useEffect(() => {
+    if (activeMeetings.length === 0) return;
+    setAttachedMeetings((cur) => {
+      const have = new Set(cur.map((m) => String(m.id)));
+      const add = activeMeetings.filter(
+        (m) => !have.has(String(m.id)) && !dismissedMeetingIds.has(String(m.id))
+      );
+      return add.length ? [...cur, ...add] : cur;
+    });
+  }, [activeMeetings, dismissedMeetingIds]);
+
+  const detachMeeting = useCallback((id: string | number) => {
+    const key = String(id);
+    setAttachedMeetings((cur) => cur.filter((m) => String(m.id) !== key));
+    setDismissedMeetingIds((s) => new Set(s).add(key));
+  }, []);
+
+  const attachMeeting = useCallback((m: MeetingItem) => {
+    setAttachedMeetings((cur) =>
+      cur.some((x) => String(x.id) === String(m.id)) ? cur : [...cur, m]
+    );
+    setDismissedMeetingIds((s) => {
+      const n = new Set(s);
+      n.delete(String(m.id));
+      return n;
+    });
+  }, []);
 
   // Instant restore on reload: hydrate the last conversation from sessionStorage
   // synchronously (no network), so the chat paints immediately. The session-file
@@ -150,6 +190,107 @@ export function EiChat() {
       loadIndex();
     }
   };
+
+  // ---- @-mention typeahead (meetings + workspace files) ----
+  const detectMention = useCallback((value: string, caret: number) => {
+    const m = value.slice(0, caret).match(/(?:^|\s)@([\p{L}\d_\-./]*)$/u);
+    if (!m) {
+      setMention(null);
+      return;
+    }
+    setMention({ query: m[1], start: caret - m[1].length - 1 });
+    setMentionIndex(0);
+  }, []);
+
+  const handleInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      setInput(e.target.value);
+      detectMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
+    },
+    [detectMention]
+  );
+
+  const mentionOptions: MentionOption[] = useMemo(() => {
+    if (!mention) return [];
+    const q = mention.query.toLowerCase();
+    const qSlug = slugify(mention.query);
+    const mtg: MentionOption[] = meetings
+      .filter((m) => !q || m.title.toLowerCase().includes(q) || String(m.id).includes(q))
+      .slice(0, 6)
+      .map((m) => ({
+        kind: "meeting",
+        value: String(m.id),
+        label: m.title,
+        sub: isActiveStatus(m.status) ? "● live" : m.status,
+      }));
+    const files: MentionOption[] = Object.entries(fileIndex)
+      .filter(([slug]) => !qSlug || slug.includes(qSlug))
+      .slice(0, 6)
+      .map(([, path]) => ({
+        kind: "file",
+        value: path,
+        label: path.split("/").pop() || path,
+        sub: path,
+      }));
+    return [...mtg, ...files];
+  }, [mention, meetings, fileIndex]);
+
+  const pickMention = useCallback(
+    (o: MentionOption) => {
+      if (!mention) return;
+      const ta = taRef.current;
+      const queryEnd = mention.start + 1 + mention.query.length;
+      const caret = ta?.selectionStart ?? queryEnd;
+      const token = o.kind === "file" ? `[[${o.value}]]` : `[[meeting:${o.value}|${o.label}]]`;
+      if (o.kind === "meeting") {
+        const m = meetings.find((x) => String(x.id) === o.value);
+        if (m) attachMeeting(m);
+      }
+      setInput((cur) => {
+        const end = Math.max(queryEnd, caret);
+        const next = cur.slice(0, mention.start) + token + " " + cur.slice(end);
+        const pos = mention.start + token.length + 1;
+        requestAnimationFrame(() => {
+          if (ta) {
+            ta.focus();
+            ta.setSelectionRange(pos, pos);
+          }
+        });
+        return next;
+      });
+      setMention(null);
+    },
+    [mention, meetings, attachMeeting]
+  );
+
+  // Keyboard nav for the mention menu; returns true if it handled the event.
+  const handleMentionKey = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
+      if (!mention || mentionOptions.length === 0) return false;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex((i) => (i + 1) % mentionOptions.length);
+        return true;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex((i) => (i - 1 + mentionOptions.length) % mentionOptions.length);
+        return true;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        pickMention(mentionOptions[Math.min(mentionIndex, mentionOptions.length - 1)]);
+        return true;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMention(null);
+        return true;
+      }
+      return false;
+    },
+    [mention, mentionOptions, mentionIndex, pickMention]
+  );
 
   // Parse a chats/<id>.md file into rendered messages.
   const parseChatMd = useCallback((text: string): ChatMsg[] => {
@@ -289,7 +430,15 @@ export function EiChat() {
       const resp = await fetch("/api/workspace-ei/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, session_id: sessionId }),
+        body: JSON.stringify({
+          message,
+          session_id: sessionId,
+          meeting_refs: attachedMeetings.map((m) => ({
+            id: m.id,
+            title: m.title,
+            status: m.status,
+          })),
+        }),
       });
       if (!resp.ok || !resp.body) {
         const data = await resp.json().catch(() => ({}));
@@ -398,6 +547,29 @@ export function EiChat() {
           <div ref={bottomRef} />
         </div>
 
+        {attachedMeetings.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-3 pt-2">
+            {attachedMeetings.map((m) => {
+              const live = isActiveStatus(m.status);
+              return (
+                <span
+                  key={String(m.id)}
+                  className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs ${
+                    live ? "bg-primary/10 text-primary" : "bg-muted"
+                  }`}
+                  title={`${m.platform || "meeting"} · ${m.status || "meeting"}`}
+                >
+                  {live ? <Radio className="h-3 w-3 animate-pulse" /> : <Calendar className="h-3 w-3" />}
+                  {live ? "Live: " : ""}
+                  <span className="max-w-[180px] truncate">{m.title}</span>
+                  <button onClick={() => detachMeeting(m.id)} aria-label="Remove meeting context">
+                    <X className="h-3 w-3 opacity-60 hover:opacity-100" />
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-1.5 px-3 pt-2">
             {attachments.map((a, i) => (
@@ -438,21 +610,33 @@ export function EiChat() {
           >
             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
           </Button>
-          <textarea
-            ref={taRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            placeholder="Ask the knowledge agent… (Enter to send, Shift+Enter for newline)"
-            rows={1}
-            className="flex-1 resize-none rounded-md border bg-background p-2 text-sm leading-relaxed focus:outline-none max-h-[40vh] overflow-y-auto"
-            disabled={busy}
-          />
+          <div className="relative flex-1">
+            {mention && (
+              <MentionMenu
+                options={mentionOptions}
+                activeIndex={mentionIndex}
+                onPick={pickMention}
+                onHover={setMentionIndex}
+              />
+            )}
+            <textarea
+              ref={taRef}
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={(e) => {
+                if (handleMentionKey(e)) return;
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              onBlur={() => setTimeout(() => setMention(null), 120)}
+              placeholder="Ask the knowledge agent…  @ to reference a meeting or file"
+              rows={1}
+              className="w-full resize-none rounded-md border bg-background p-2 text-sm leading-relaxed focus:outline-none max-h-[40vh] overflow-y-auto"
+              disabled={busy}
+            />
+          </div>
           <Button onClick={send} disabled={busy || (!input.trim() && attachments.length === 0)} className="self-end gap-1">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             Send

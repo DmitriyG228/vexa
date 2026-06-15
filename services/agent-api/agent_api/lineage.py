@@ -443,6 +443,40 @@ async def fetch_transcript(meeting_id) -> str:
     return "\n".join(lines)
 
 
+# Caps so a long (possibly live) transcript can't blow the prompt / latency.
+EI_CHAT_MEETING_CHARS = 8000      # per-meeting transcript cap (keep the latest tail)
+EI_CHAT_MEETING_TOTAL = 24000     # total across all referenced meetings
+
+
+async def _assemble_meeting_context(meeting_refs) -> str:
+    """Build a labeled, size-capped block from the meetings the user attached in
+    chat (live pill / @-mention). Each ref is {id, title, status}; the transcript
+    is the live-merged snapshot from fetch_transcript. Best-effort and transient —
+    ownership is verified upstream at the dashboard proxy, never persisted here."""
+    if not meeting_refs:
+        return ""
+    blocks: list[str] = []
+    total = 0
+    for ref in meeting_refs:
+        if not isinstance(ref, dict) or ref.get("id") is None:
+            continue
+        mid = ref["id"]
+        transcript = await fetch_transcript(mid)
+        if not transcript.strip():
+            continue
+        if len(transcript) > EI_CHAT_MEETING_CHARS:
+            transcript = "…(earlier transcript truncated)…\n" + transcript[-EI_CHAT_MEETING_CHARS:]
+        title = (str(ref.get("title") or "").strip() or f"Meeting {mid}")
+        status = str(ref.get("status") or "").strip()
+        label = f"[MEETING: {title}" + (f" — {status}]" if status else "]")
+        block = f"{label}\n{transcript}"
+        if total + len(block) > EI_CHAT_MEETING_TOTAL and blocks:
+            break
+        total += len(block)
+        blocks.append(block)
+    return "\n\n".join(blocks)
+
+
 # ── Agent invocation ───────────────────────────────────────────────────────
 
 
@@ -830,6 +864,10 @@ class ChatRequest(BaseModel):
     message: str
     user_id: Optional[str] = None
     session_id: Optional[str] = None
+    # Meetings the user pulled into context via the live pill or @-mention.
+    # Each: {id, title, status}. Ownership is verified at the dashboard proxy
+    # (it holds the user token); agent-api fetches each transcript by id.
+    meeting_refs: Optional[list[dict]] = None
 
 
 def _extract_agent_reply(stdout: str) -> Optional[str]:
@@ -861,24 +899,32 @@ def _extract_agent_reply(stdout: str) -> Optional[str]:
     return None
 
 
-def _build_chat_prompt(message: str, history: str = "") -> str:
+def _build_chat_prompt(message: str, history: str = "", meeting_context: str = "") -> str:
     history_block = (
         "CONVERSATION SO FAR (from the session log; continue it):\n" + history + "\n\n"
         if history.strip() else ""
+    )
+    meeting_block = (
+        "MEETING CONTEXT (transcripts the user attached — a live meeting may be "
+        "in progress, so this is a snapshot up to now; transient, NOT in the "
+        "workspace):\n" + meeting_context + "\n\n"
+        if meeting_context.strip() else ""
     )
     return (
         "You are the organization's knowledge agent, working inside its git "
         "knowledge workspace (conventions: AGENT.md; entity graph under "
         "graph/kg/, strategy graph under graph/sg/, templates under templates/).\n\n"
-        + history_block +
+        + history_block
+        + meeting_block +
         "USER MESSAGE:\n" + message + "\n\n"
         "Instructions:\n"
-        "1. Answer the user using the workspace content; cite files with "
-        "[[wikilinks]] or paths where relevant.\n"
+        "1. Answer the user using the workspace content and any MEETING CONTEXT "
+        "above; cite files with [[wikilinks]] or paths where relevant.\n"
         "2. If the user asks you to record, update, research-and-store, or "
         "restructure knowledge, edit/create files following the workspace "
         "conventions (dated confidence-scored appends in routine-updates "
-        "regions; templates for new entities; sg/ nodes for strategy).\n"
+        "regions; templates for new entities; sg/ nodes for strategy). You MAY "
+        "persist knowledge derived from the meeting context when the user asks.\n"
         "3. ALWAYS write your final reply for the user as markdown to "
         ".ei/reply.md — even for greetings or questions needing no file "
         "changes (create the .ei directory; it is never committed).\n"
@@ -937,7 +983,8 @@ async def ei_chat(body: ChatRequest, org: str = Query(...)):
         if os.path.isfile(hist_path):
             with open(hist_path) as f:
                 history = f.read()[-6000:]
-        prompt = _build_chat_prompt(body.message, history)
+        meeting_ctx = await _assemble_meeting_context(getattr(body, "meeting_refs", None))
+        prompt = _build_chat_prompt(body.message, history, meeting_ctx)
         agent_cmd = _agent_command(ei)
         shell_cmd = (
             f"cd {container_run_root}/repo && EI_ORG_ID={shlex.quote(org)} "
@@ -1136,7 +1183,11 @@ async def _run_chat_turn(turn, org_s, body, session_id, chat_rel,
         if rc != 0:
             raise RuntimeError("workspace transfer failed")
 
-        prompt = _build_chat_prompt(body.message, history)
+        meeting_ctx = ""
+        if getattr(body, "meeting_refs", None):
+            turn.emit({"type": "status", "text": "loading meeting context"})
+            meeting_ctx = await _assemble_meeting_context(body.meeting_refs)
+        prompt = _build_chat_prompt(body.message, history, meeting_ctx)
         agent_cmd = _streaming_agent_cmd(ei)
         shell_cmd = (
             f"cd {container_run_root}/repo && EI_ORG_ID={shlex.quote(org_s)} "

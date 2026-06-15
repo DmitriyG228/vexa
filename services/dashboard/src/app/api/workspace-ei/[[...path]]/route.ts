@@ -11,12 +11,50 @@
  */
 
 import { NextRequest } from "next/server";
+import { cookies } from "next/headers";
 import { getAuthenticatedEiOrg } from "@/lib/ei-org";
+import { getAuthCookieName } from "@/lib/auth-cookies";
 
 const AGENT_API_URL = process.env.AGENT_API_URL || "http://localhost:8100";
 const AGENT_API_TOKEN = process.env.AGENT_API_TOKEN || "";
 
 type Ctx = { params: Promise<{ path?: string[] }> };
+
+type MeetingRef = { id: number | string; title?: string; status?: string };
+
+/**
+ * Keep only the meeting refs the authenticated user actually owns. The agent-api
+ * fetches transcripts by internal id with no per-user check, so an unverified id
+ * would be an IDOR. We verify each id against the gateway's user-scoped
+ * GET /bots/id/{id} using the caller's own token (cookie). id is the security
+ * boundary; title/status are display-only and pass through.
+ */
+async function verifyMeetingRefs(refs: unknown): Promise<MeetingRef[]> {
+  if (!Array.isArray(refs) || refs.length === 0) return [];
+  const VEXA_API_URL = process.env.VEXA_API_URL;
+  if (!VEXA_API_URL) return [];
+  const token = (await cookies()).get(getAuthCookieName())?.value;
+  if (!token) return [];
+  const candidates = refs
+    .filter((r): r is MeetingRef => !!r && typeof r === "object" && "id" in r)
+    .slice(0, 8); // bound the per-turn verification fan-out
+  const checked = await Promise.all(
+    candidates.map(async (r): Promise<MeetingRef | null> => {
+      try {
+        const resp = await fetch(`${VEXA_API_URL}/bots/id/${encodeURIComponent(String(r.id))}`, {
+          headers: { "X-API-Key": token },
+          signal: AbortSignal.timeout(5000),
+        });
+        return resp.ok ? { id: r.id, title: r.title, status: r.status } : null;
+      } catch {
+        return null;
+      }
+    })
+  );
+  const verified: MeetingRef[] = [];
+  for (const r of checked) if (r) verified.push(r);
+  return verified;
+}
 
 export async function GET(req: NextRequest, ctx: Ctx): Promise<Response> {
   const auth = await getAuthenticatedEiOrg();
@@ -138,7 +176,7 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
   if (leaf !== "chat" && leaf !== "chat/stream" && leaf !== "sessions/rename") {
     return Response.json({ detail: "Not found" }, { status: 404 });
   }
-  let body: { message?: string; session_id?: string; title?: string };
+  let body: { message?: string; session_id?: string; title?: string; meeting_refs?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -152,8 +190,10 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
       return Response.json({ detail: "message required" }, { status: 400 });
     }
     target = new URL(`${AGENT_API_URL}/api/ei/${leaf === "chat/stream" ? "chat/stream" : "chat"}`);
-    // user_id resolved server-side from the session — never client-supplied
-    payload = { message, user_id: auth.userId, session_id: body.session_id || null };
+    // user_id resolved server-side from the session — never client-supplied;
+    // meeting_refs verified against the user's own meetings (drops unowned ids).
+    const meeting_refs = await verifyMeetingRefs(body.meeting_refs);
+    payload = { message, user_id: auth.userId, session_id: body.session_id || null, meeting_refs };
   } else {
     target = new URL(`${AGENT_API_URL}/api/ei/chat/sessions/rename`);
     payload = { session_id: body.session_id || "", title: body.title || "" };

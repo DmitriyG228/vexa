@@ -89,6 +89,14 @@ export function WikiMarkdown({
           const href = p.href || "";
           if (href.startsWith("wiki:")) {
             const name = decodeURIComponent(href.slice(5));
+            // Meeting reference [[meeting:<id>|Title]] → inline chip (context marker).
+            if (name.startsWith("meeting:")) {
+              return (
+                <span className="inline-flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 align-baseline text-xs text-primary">
+                  📅 {p.children}
+                </span>
+              );
+            }
             const path = fileIndex[slugify(name)];
             return (
               <a
