@@ -36,7 +36,9 @@ system meetings  # capture → transcribe → record; owns the raw transcript
 
 system agent  # copilot; owns the processed (cleaned) transcript + signals
   service agent-api
+  service vcs-ingress
   contract event.v1
+  contract ingress.v1
   contract invoke.v1
   contract proactive-card.v1
   contract proposal.v1
@@ -51,6 +53,8 @@ system agent  # copilot; owns the processed (cleaned) transcript + signals
   data-asset proc-stream [writers: agent-worker]
   data-asset proposal-queue [writers: agent-api]
   data-asset proposal-audit [writers: agent-api]
+  data-asset vcs-events [writers: vcs-ingress]
+  data-asset vcs-subs [writers: agent-api]
   data-asset va-chat
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
@@ -111,6 +115,11 @@ edges:
   agent-worker -req-> agent-api  # POST /internal/proposals — propose_vcs_action emits proposal.v1, dispatch-token verified (the human-gate seam; no GitHub credential in the worker)
   agent-api -write-> proposal-queue  # HSET/SADD proposals + pending sets (put/decide/mark_executed — the one writer)
   agent-api -write-> proposal-audit  # XADD every status transition + the approved feed the future executor consumes
+  vcs-ingress -req-> agent-api  # POST /events — one event.v1 envelope per matching subscription: OPAQUE github:// ref + the routine's plan, never payload bytes
+  vcs-ingress -req-> redis  # SET NX delivery-id dedupe + XADD vcs:events (persist-first) + HGET vcs:subs (read-only view)
+  vcs-ingress -write-> vcs-events  # XADD one ingress.v1 Delivery per verified webhook BEFORE any dispatch (replay recovers)
+  vcs-ingress -read-> vcs-subs  # HGET repo -> subscriptions to fan a delivery out (never writes)
+  agent-api -write-> vcs-subs  # HSET/HDEL — the workspace-routine reconciler compiles `on: vcs.*` routines into subscription records (the one writer)
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings
   gateway -req-> agent-api  # proxy /agent/*
   gateway -req-> admin-api  # POST /internal/validate (authz oracle)
@@ -125,7 +134,7 @@ edges:
   dashboard -req-> gateway  # dashboard client; live WS via gateway
   extension -req-> gateway  # browser extension client; live WS via gateway
   bot, agent-worker deployed-in runtime
-  gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
+  gateway, meeting-api, agent-api, vcs-ingress, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
 
 flows:
   live-transcript-flow: bot-writes-segments-stream -> collector-reads-segments -> collector-writes-tc -> aw-tcnative -> aw-proc -> terminal-reads-processed

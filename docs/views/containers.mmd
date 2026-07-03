@@ -9,6 +9,7 @@ flowchart LR
   end
   subgraph agent["agent"]
     agent_api["agent-api"]
+    vcs_ingress["vcs-ingress"]
     agent_worker["agent-worker"]
   end
   subgraph gateway_system["gateway"]
@@ -37,6 +38,8 @@ flowchart LR
   meeting_api -->|"HTTPS"| runtime
   agent_api -->|"HTTPS"| runtime
   agent_worker -->|"HTTPS"| agent_api
+  vcs_ingress -->|"HTTPS"| agent_api
+  vcs_ingress -->|""| redis
   gateway -->|"HTTPS"| meeting_api
   gateway -->|"HTTPS"| agent_api
   gateway -->|"HTTPS"| admin_api

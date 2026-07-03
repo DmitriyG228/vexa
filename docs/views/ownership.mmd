@@ -15,6 +15,8 @@ flowchart LR
   unit_in[("unit:{id}:in (stream)")]
   proposal_queue[("proposal:{id} + per-subject sets (hash/set)")]
   proposal_audit[("proposal:audit + proposal:approved (streams)")]
+  vcs_events[("vcs:events (stream)")]
+  vcs_subs[("vcs:subs (hash)")]
   va_chat[("va:meeting:{id}:chat (pubsub)")]
   identity_db[("identity (users/api_tokens)")]
   bot -->|write| segments_stream
@@ -43,6 +45,9 @@ flowchart LR
   agent_worker -.->|read| unit_in
   agent_api -->|write| proposal_queue
   agent_api -->|write| proposal_audit
+  vcs_ingress -->|write| vcs_events
+  vcs_ingress -.->|read| vcs_subs
+  agent_api -->|write| vcs_subs
   gateway -.->|read| bm_status
   gateway -.->|read| u_meetings
   gateway -.->|read| va_chat

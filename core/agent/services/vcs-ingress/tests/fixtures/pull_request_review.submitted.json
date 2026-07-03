@@ -1,0 +1,16 @@
+{
+  "action": "submitted",
+  "review": {
+    "id": 55001,
+    "state": "changes_requested",
+    "body": "The seal diff is missing.",
+    "user": { "login": "hubot" }
+  },
+  "pull_request": {
+    "number": 731,
+    "title": "feat: capture kit extraction",
+    "user": { "login": "octocat" }
+  },
+  "repository": { "full_name": "vexa-ai/vexa", "private": false },
+  "sender": { "login": "hubot" }
+}

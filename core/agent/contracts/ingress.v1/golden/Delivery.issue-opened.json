@@ -1,0 +1,16 @@
+{
+  "delivery_id": "72d3162e-cc78-11e3-81ab-4c9367dc0958",
+  "provider": "github",
+  "event": "issues",
+  "action": "opened",
+  "repo": "vexa-ai/vexa",
+  "sender": "octocat",
+  "received_at": "2026-07-01T09:14:03Z",
+  "signature_ok": true,
+  "payload_digest": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
+  "envelope": {
+    "name": "vcs.issue.opened",
+    "occurred_at": "2026-07-01T09:14:03Z",
+    "source": { "uri": "github://vexa-ai/vexa/issues/512" }
+  }
+}

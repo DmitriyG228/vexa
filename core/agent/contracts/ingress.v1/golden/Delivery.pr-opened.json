@@ -1,0 +1,16 @@
+{
+  "delivery_id": "a09b4cde-11e3-81ab-4c93-72d3162e0958",
+  "provider": "github",
+  "event": "pull_request",
+  "action": "opened",
+  "repo": "vexa-ai/vexa",
+  "sender": "hubot",
+  "received_at": "2026-07-01T10:02:47Z",
+  "signature_ok": true,
+  "payload_digest": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+  "envelope": {
+    "name": "vcs.pr.opened",
+    "occurred_at": "2026-07-01T10:02:47Z",
+    "source": { "uri": "github://vexa-ai/vexa/pull/731" }
+  }
+}

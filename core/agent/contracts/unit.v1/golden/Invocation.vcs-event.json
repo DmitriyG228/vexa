@@ -1,0 +1,8 @@
+{
+  "identity": { "subject": "u_jane", "launcher": "integration:vcs" },
+  "runner": "claude-code",
+  "workspaces": [ { "id": "u_jane", "mode": "ro" } ],
+  "trigger": "event",
+  "context": { "kind": "vcs", "ref": { "uri": "github://vexa-ai/vexa/issues/512" } },
+  "start": { "entrypoint": { "inline": "Fetch the issue at the event ref with your read-only vcs tool, triage it against kg/, and propose an L2 comment via propose_vcs_action." } }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "rt_9e01aa42f0",
+  "owner": "u_jane",
+  "name": "issue-triage",
+  "trigger": { "kind": "event", "event": "vcs.issue.opened", "repo": "vexa-ai/vexa" },
+  "plan": { "prompt": "Fetch the issue at the event ref with your read-only vcs tool, triage it against kg/, and propose an L2 comment via propose_vcs_action." },
+  "access": "L2",
+  "lifecycle": "oneshot",
+  "enabled": true
+}

@@ -41,6 +41,7 @@ from control_plane.workspace_attach import CloneError, attached_workspaces, rena
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
 from control_plane import proposals as proposals_mod
+from control_plane import vcs_subscriptions as vcs_subs_mod
 from shared.ports import ProposalStorePort, SchedulerPort, StreamReader
 from control_plane.workspace_reader import WorkspaceReader
 
@@ -386,6 +387,7 @@ def create_app(
     redis_url: Optional[str] = None,
     proposals: Optional[ProposalStorePort] = None,
     token_verifier: Optional[proposals_mod.TokenVerifier] = None,
+    vcs_subscriptions: Optional[vcs_subs_mod.RedisVcsSubscriptionStore] = None,
 ) -> FastAPI:
     if sessions is not None:
         sess = sessions
@@ -399,6 +401,12 @@ def create_app(
         import redis as _redis
 
         proposals = proposals_mod.RedisProposalStore(_redis.from_url(redis_url, decode_responses=True))
+    if vcs_subscriptions is None and redis_url:
+        import redis as _redis
+
+        vcs_subscriptions = vcs_subs_mod.RedisVcsSubscriptionStore(
+            _redis.from_url(redis_url, decode_responses=True)
+        )
     live = _LiveMeetings()
     wsr = reader or WorkspaceReader("/workspaces")
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
@@ -647,6 +655,7 @@ def create_app(
                 scheduler=scheduler,
                 invocations_url=invocations_url,
                 workspaces_dir=wsr.root,
+                subscriptions=vcs_subscriptions,
             )
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="unknown routine")
@@ -1033,6 +1042,14 @@ def _build_production_app() -> FastAPI:
     identity = LocalIdentityMinter(settings.dispatch_signing_key.get_secret_value())
     dispatcher = Dispatcher(settings, runtime, identity)
     invocations_url = settings.agent_api_self_url.rstrip("/") + "/invocations"
+    # The vcs:subs subscription view (routine.v1 kind=event → the vcs ingress) — agent-api is the
+    # ONE writer; built here so the app's PATCH-reconcile and the background reconciler share it.
+    import redis as _redis
+    from control_plane.vcs_subscriptions import RedisVcsSubscriptionStore
+
+    vcs_subscriptions = RedisVcsSubscriptionStore(
+        _redis.from_url(settings.redis_url, decode_responses=True)
+    )
     app = create_app(
         dispatcher,
         stream_reader=RedisStreamReader(settings.redis_url),
@@ -1043,12 +1060,14 @@ def _build_production_app() -> FastAPI:
         # The proposal store is built from redis_url inside create_app; the sink verifies the
         # per-dispatch token with the SAME key identity mints with (mint/verify — one adapter).
         token_verifier=identity,
+        vcs_subscriptions=vcs_subscriptions,
     )
     app.state.workspace_routine_reconciler = start_workspace_routine_reconciler(
         scheduler=scheduler,
         invocations_url=invocations_url,
         workspaces_dir=settings.workspaces_dir,
         interval_sec=settings.routine_reconcile_interval_sec,
+        subscriptions=vcs_subscriptions,
     )
 
     @app.on_event("shutdown")

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/ingress.v1",
+  "title": "ingress.v1",
+  "description": "The untrusted-event ingress record. GitHub App webhooks (issues, PRs, comments) are ATTACKER-INFLUENCEABLE input: vcs-ingress verifies the X-Hub-Signature-256, persists ONE Delivery per webhook to the vcs:events stream (persist-first — a dispatch failure never loses the record; /internal/replay re-runs it), and dispatches an event.v1 envelope per matching vcs:subs subscription. NO PAYLOAD BYTES CROSS THE SEAM: the envelope carries an opaque github:// ref only, the payload itself is anchored by digest and deliberately not re-stored, and the fired agent unit re-fetches content via read-only tools. Worst case of any injection = a bad proposal.v1 in the queue (the human gate), never an action.",
+  "$defs": {
+    "SourceRef": {
+      "description": "The OPAQUE reference to the GitHub object the delivery concerns — github://<owner>/<repo>/issues/<n> or .../pull/<n>. A cred-gated read-only tool resolves it in-container; never the bytes.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri"],
+      "properties": {
+        "uri": { "type": "string", "description": "opaque source uri, e.g. github://vexa-ai/vexa/issues/512" },
+        "etag": { "type": "string", "description": "optional version/etag" }
+      }
+    },
+    "Plan": {
+      "description": "The plan a dispatched envelope carries — stamped from the matching subscription (the routine's authored plan), never derived from webhook content.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string", "description": "workspace plan doc path" },
+        "prompt": { "type": "string", "description": "inline plan prompt" }
+      }
+    },
+    "Envelope": {
+      "description": "The normalized event.v1 Event this delivery emits. The STORED form carries the shared identity fields (name, occurred_at, source); `subject` + `plan` are stamped PER SUBSCRIPTION at dispatch time, and the dispatched form must conform to event.v1 (validated by path at the agent-api seam). Opaque ref ONLY — no title/body text ever rides here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "source"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^vcs\\.", "description": "vcs.issue.opened | vcs.issue.commented | vcs.pr.opened | vcs.pr.commented | vcs.pr.review — derived from (event, action)" },
+        "subject": { "type": "string", "description": "identity.v1 subject — absent in the stored record; stamped from the matching subscription at dispatch" },
+        "occurred_at": { "type": "string", "description": "ISO-8601 timestamp (the ingress arrival time)" },
+        "source": { "$ref": "#/$defs/SourceRef" },
+        "plan": { "$ref": "#/$defs/Plan" }
+      }
+    },
+    "Delivery": {
+      "description": "One persisted webhook delivery — the durable audit + replay record on the vcs:events stream. Only verified (signature_ok) deliveries whose (event, action) maps to a vcs.* name are persisted; a delivery with no matching subscription is persisted but not dispatched.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["delivery_id", "provider", "event", "received_at", "envelope"],
+      "properties": {
+        "delivery_id": { "type": "string", "description": "the X-GitHub-Delivery guid — the dedupe key (redis SET NX) and the /internal/replay/{delivery_id} handle" },
+        "provider": { "const": "github" },
+        "event": { "type": "string", "description": "the raw X-GitHub-Event type (issues | issue_comment | pull_request | pull_request_review | pull_request_review_comment)" },
+        "action": { "type": "string", "description": "the payload action (opened | created | submitted | …)" },
+        "repo": { "type": "string", "description": "owner/name — the vcs:subs subscription key" },
+        "sender": { "type": "string", "description": "the GitHub login that triggered the delivery — attacker-chosen, audit/display only, never an identity" },
+        "received_at": { "type": "string", "description": "ISO-8601 arrival timestamp" },
+        "signature_ok": { "type": "boolean", "description": "X-Hub-Signature-256 verified against the raw body — always true for a persisted record (unverified deliveries are rejected 401 before persistence)" },
+        "payload_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "sha256 of the raw request body — the AUDIT ANCHOR: the payload is deliberately NOT re-stored (no payload bytes across the seam), so the digest is what ties this record back to what GitHub sent" },
+        "envelope": { "$ref": "#/$defs/Envelope" }
+      }
+    }
+  }
+}
