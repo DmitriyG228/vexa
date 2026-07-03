@@ -83,6 +83,11 @@ class Settings(BaseSettings):
     # The shared key the Identity service signs per-dispatch tokens with (dev tier); every boundary
     # verifies with the same key. k8s replaces this with SPIRE-issued SVIDs behind the same interface.
     dispatch_signing_key: SecretStr = SecretStr("dev-dispatch-signing-key")
+    # The vcs-executor's report-back bearer (POST /internal/proposals/{id}/executed). A STANDING
+    # service, not a dispatched worker — the per-dispatch token pattern doesn't fit (nothing mints
+    # for it), so the edge is a dedicated shared secret checked constant-time. Empty (default) =
+    # FAIL-CLOSED: the route answers 503 until both sides carry the same value.
+    executor_result_token: SecretStr = SecretStr("")
 
     def is_secret_present(self) -> bool:
         """True when a scoped identity token has been provided (without revealing it)."""

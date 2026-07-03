@@ -5,7 +5,7 @@
   "description": "An edge that carries tenant data (e.g. meeting audio) to an external system must declare its egress posture, so a security review can gate it.",
   "type": "object",
   "properties": {
-    "dataClass": { "type": "string", "enum": ["audio", "transcript", "pii", "metadata"] },
+    "dataClass": { "type": "string", "enum": ["audio", "transcript", "pii", "metadata", "vcs-payload"] },
     "destination": { "type": "string", "enum": ["tenant-hosted", "external-saas"] },
     "egressApproved": { "type": "boolean", "description": "Must be true for any external-saas destination carrying tenant data." }
   },

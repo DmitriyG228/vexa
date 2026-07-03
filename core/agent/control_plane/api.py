@@ -10,6 +10,7 @@ A thin FastAPI surface mirroring ``runtime_kernel/api.py``. Routes (the gateway 
   GET  /api/proposals …      — the proposal queue (proposal.v1 — the human gate for VCS actions)
   POST /api/proposals/decide — batch L2 decision; POST /api/proposals/{id}/approve|reject — per-action
   POST /internal/proposals   — the worker-side emission sink (dispatch-token verified)
+  POST /internal/proposals/{id}/executed — the vcs-executor's report-back (shared-secret bearer)
   GET  /api/workspace/…      — read the workspace tree/file
   GET  /health               — liveness
 
@@ -21,6 +22,7 @@ honestly. Built lazily (PEP 562) so ``uvicorn control_plane.api:app`` wires the 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import re
@@ -251,6 +253,16 @@ class ProposalNoteBody(BaseModel):
     """Body for the per-action approve/reject — just an optional decision note."""
     model_config = {"extra": "forbid"}
     note: Optional[str] = None
+
+
+class ProposalExecutedBody(BaseModel):
+    """Body for POST /internal/proposals/{id}/executed — the vcs-executor's report-back. Mirrors
+    proposal.v1's ``ExecutionRecord`` fields (``at`` is stamped server-side): an ``error`` marks
+    the proposal ``failed``, anything else ``executed``."""
+    model_config = {"extra": "forbid"}
+    result_url: Optional[str] = None
+    sha: Optional[str] = None
+    error: Optional[str] = None
 
 
 class MeetingStart(BaseModel):
@@ -809,6 +821,34 @@ def create_app(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         return {"id": proposal_id}
+
+    @app.post("/internal/proposals/{proposal_id}/executed")
+    def internal_proposal_executed(proposal_id: str, request: Request, body: ProposalExecutedBody):
+        """The vcs-executor's report-back sink — agent-api stays the ONE writer of proposal state
+        (P23): the executor never touches the redis hashes, it reports here and ``mark_executed``
+        stamps the ExecutionRecord + audits the transition (``executed``, or ``failed`` on an
+        ``error``). AUTH is a dedicated shared-secret bearer (``VEXA_EXECUTOR_RESULT_TOKEN``,
+        constant-time compare): the executor is a STANDING service, not a dispatched worker — no
+        per-dispatch identity token is ever minted for it, so the /internal/proposals verifier
+        pattern doesn't apply. Unconfigured secret → 503 (fail-closed); wrong/missing bearer →
+        401; unknown id → 404; a proposal that is not ``approved`` → 409 — the executor ACKs on
+        409 (an already-settled redelivery), which is the at-least-once idempotency contract."""
+        store = _proposal_store()
+        expected = settings.executor_result_token.get_secret_value() if settings is not None else ""
+        if not expected:
+            raise HTTPException(status_code=503, detail="executor result token not configured")
+        auth = request.headers.get("authorization") or ""
+        presented = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        if not presented or not hmac.compare_digest(presented, expected):
+            raise HTTPException(status_code=401, detail="missing or invalid executor token")
+        result = {k: v for k, v in body.model_dump().items() if v is not None}
+        try:
+            updated = store.mark_executed(proposal_id, result)
+        except proposals_mod.UnknownProposal:
+            raise HTTPException(status_code=404, detail="unknown proposal")
+        except proposals_mod.InvalidTransition as e:  # not approved — already settled/undecided
+            raise HTTPException(status_code=409, detail=str(e))
+        return updated
 
     @app.get("/api/workspace/tree")
     def ws_tree(request: Request, hidden: bool = False):

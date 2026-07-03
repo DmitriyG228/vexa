@@ -145,11 +145,13 @@ class GitHubVcs(VcsPort):
         subject: str,
         secret_name: str = "workspace_git.token",
         scope: str = "repo:push",
+        api_base: str = "https://api.github.com",
     ) -> None:
         self._secrets = secrets
         self._subject = subject
         self._secret_name = secret_name
         self._scope = scope
+        self._api_base = api_base.rstrip("/")
 
     def push(self, local_dir: str, remote_url: str, ref: str) -> str:
         work = Path(local_dir)
@@ -175,6 +177,39 @@ class GitHubVcs(VcsPort):
         finally:
             # Strip the token from the persisted remote so it can't leak to the repo/object store.
             _git(work, "remote", "set-url", _PUSH_REMOTE, remote_url)
+
+    def open_pr(self, remote_url: str, *, base: str, head: str, title: str, body: str) -> str:
+        """Open ``head`` → ``base`` as a PR on the GitHub repo behind ``remote_url``; return its URL.
+
+        The worker-side counterpart of the vcs-executor's PR call (that service is self-contained
+        by design — gate:isolation-py — so this adapter is not shared with it). Same discipline as
+        ``push``: the brokered token is ``reveal()``-ed ONLY into the Authorization header of this
+        one request, logged only in redacted form (P15). stdlib urllib — no new dependency.
+        """
+        repo = re.sub(r"\.git$", "", remote_url.rstrip("/")).rsplit("/", 2)
+        if len(repo) < 3 or not repo[-2] or not repo[-1]:
+            raise ValueError(f"cannot derive owner/name from remote url {remote_url!r}")
+        owner_repo = f"{repo[-2]}/{repo[-1]}"
+        brokered = self._secrets.get_secret(self._subject, self._secret_name, scope="repo:pr")
+        # METADATA ONLY — the value is never interpolated into a log record (P15).
+        logger.info(
+            "github open_pr subject=%s repo=%s head=%s base=%s token=%r",
+            self._subject, owner_repo, head, base, brokered,  # %r → BrokeredSecret redacts itself
+        )
+        payload = json.dumps({"title": title, "body": body, "head": head, "base": base}).encode()
+        req = urllib.request.Request(
+            f"{self._api_base}/repos/{owner_repo}/pulls",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {brokered.reveal()}",
+                "Accept": "application/vnd.github+json",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            created = json.loads(resp.read())
+        return created.get("html_url", "")
 
 
 class RuntimeHttpClient(RuntimePort):

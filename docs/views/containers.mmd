@@ -10,6 +10,7 @@ flowchart LR
   subgraph agent["agent"]
     agent_api["agent-api"]
     vcs_ingress["vcs-ingress"]
+    vcs_executor["vcs-executor"]
     agent_worker["agent-worker"]
   end
   subgraph gateway_system["gateway"]
@@ -31,6 +32,7 @@ flowchart LR
   dashboard["dashboard"]
   extension["extension"]
   terminal["terminal"]
+  github["GitHub"]
   meeting_api -->|"write"| segments_table
   bot -->|"HTTPS"| transcription
   meeting_api -->|"JDBC"| postgres
@@ -40,6 +42,9 @@ flowchart LR
   agent_worker -->|"HTTPS"| agent_api
   vcs_ingress -->|"HTTPS"| agent_api
   vcs_ingress -->|""| redis
+  vcs_executor -->|""| redis
+  vcs_executor -->|"HTTPS"| agent_api
+  vcs_executor -->|"HTTPS"| github
   gateway -->|"HTTPS"| meeting_api
   gateway -->|"HTTPS"| agent_api
   gateway -->|"HTTPS"| admin_api

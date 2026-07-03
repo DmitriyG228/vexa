@@ -19,6 +19,9 @@ flowchart LR
     postgres["postgres"]
     minio["minio"]
     vcs_ingress["vcs-ingress"]
+    vcs_executor["vcs-executor"]
   end
   transcription["transcription"]
   bot ==>|"audio -> tenant-hosted"| transcription
+  github["GitHub"]
+  vcs_executor ==>|"vcs-payload -> external-saas"| github
