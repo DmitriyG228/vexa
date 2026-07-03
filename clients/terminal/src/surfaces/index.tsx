@@ -13,4 +13,5 @@ import "./meeting";    // list "meetings" + tab-kind "meeting"
 import "./canvas";     // tab-kind "canvas" + command "Open Meeting Canvas"
 import "./workspace";  // list "files" (+ git) + tab-kind "doc"
 import "./routines";   // list "routines" + tab-kind "routines" (the board)
+import "./approvals";  // list "approvals" + tab-kinds "approvals" (board) / "proposal" (detail)
 // tasks deferred — surfaces as quick-action cards in chat later (see roadmap)
