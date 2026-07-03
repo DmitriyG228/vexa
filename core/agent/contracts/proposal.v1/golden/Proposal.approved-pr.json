@@ -1,0 +1,22 @@
+{
+  "id": "prop_7b20de55",
+  "subject": "u_jane",
+  "routine": { "id": "rt_docs_fixer", "name": "Docs drift fixer", "declared_access": "L3" },
+  "origin": { "unit_id": "agent-u_jane-scheduled-4d1be00a2c", "trigger": "scheduled" },
+  "level": "L3",
+  "action": "open_pr",
+  "target": { "provider": "github", "repo": "vexa-ai/vexa", "kind": "branch", "ref": "docs/fix-agent-port" },
+  "payload": {
+    "branch": "docs/fix-agent-port",
+    "base": "main",
+    "title": "docs: agent-api listens on 8100, not 8000",
+    "body": "The quickstart still names the pre-0.12 port. Compose and the Settings default both say 8100.",
+    "patches": [
+      { "path": "docs/quickstart.md", "diff": "@@ -12,1 +12,1 @@\n-agent-api listens on port 8000\n+agent-api listens on port 8100" }
+    ]
+  },
+  "rationale": "docs/quickstart.md names port 8000; deploy/compose/docker-compose.yml and shared/config.py both bind agent-api to 8100 — the doc misleads every new self-hoster.",
+  "status": "approved",
+  "decision": { "by": "u_jane", "at": "2026-06-30T09:03:00Z", "note": "checked the diff — correct" },
+  "created_at": "2026-06-30T07:45:00Z"
+}

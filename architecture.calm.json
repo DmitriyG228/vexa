@@ -393,6 +393,18 @@
       ]
     },
     {
+      "unique-id": "proposal.v1",
+      "node-type": "contract",
+      "name": "proposal.v1",
+      "description": "proposal.v1 \u2014 sealed/published contract (agent)",
+      "metadata": [
+        {
+          "path": "core/agent/contracts/proposal.v1",
+          "domain": "agent"
+        }
+      ]
+    },
+    {
       "unique-id": "routine.v1",
       "node-type": "contract",
       "name": "routine.v1",
@@ -1098,6 +1110,62 @@
       "description": "interactive input stream for warm chat units; agent-worker reads. NO in-repo writer in this carve (input arrives via the hosted control plane)"
     },
     {
+      "unique-id": "proposal-queue",
+      "node-type": "data-asset",
+      "name": "proposal:{id} + per-subject sets (hash/set)",
+      "description": "the proposal.v1 human-gate queue: one hash per proposal + per-subject pending/all id sets; agent-api is the ONE writer (the worker only POSTs the sink, the executor only reads approvals)",
+      "controls": {
+        "ownership": {
+          "description": "single writer (P23)",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "agent-api"
+                ],
+                "match": "proposal:(?!audit|approved)",
+                "op": "hset"
+              }
+            }
+          ]
+        }
+      },
+      "metadata": [
+        {
+          "contract": "proposal.v1"
+        }
+      ]
+    },
+    {
+      "unique-id": "proposal-audit",
+      "node-type": "data-asset",
+      "name": "proposal:audit + proposal:approved (streams)",
+      "description": "append-only audit of every proposal transition, plus the approval feed the (future) credentialed executor XREADGROUPs; agent-api XADDs both",
+      "controls": {
+        "ownership": {
+          "description": "single writer (P23)",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "agent-api"
+                ],
+                "match": "proposal:(audit|approved)",
+                "op": "xadd"
+              }
+            }
+          ]
+        }
+      },
+      "metadata": [
+        {
+          "contract": "proposal.v1"
+        }
+      ]
+    },
+    {
       "unique-id": "va-chat",
       "node-type": "data-asset",
       "name": "va:meeting:{id}:chat (pubsub)",
@@ -1136,6 +1204,7 @@
             "event.v1",
             "invoke.v1",
             "proactive-card.v1",
+            "proposal.v1",
             "routine.v1",
             "task.v1",
             "tool.v1",
@@ -1145,6 +1214,8 @@
             "out-stream",
             "unit-in",
             "proc-stream",
+            "proposal-queue",
+            "proposal-audit",
             "va-chat"
           ]
         }
@@ -1823,6 +1894,60 @@
       "metadata": [
         {
           "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "aw-propose",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-worker"
+          },
+          "destination": {
+            "node": "agent-api",
+            "interface": "agent-api-rest"
+          }
+        }
+      },
+      "description": "POST /internal/proposals — propose_vcs_action emits proposal.v1, dispatch-token verified (the human-gate seam; no GitHub credential in the worker)",
+      "protocol": "HTTPS"
+    },
+    {
+      "unique-id": "aa-propqueue",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-api"
+          },
+          "destination": {
+            "node": "proposal-queue"
+          }
+        }
+      },
+      "description": "HSET/SADD proposals + pending sets (put/decide/mark_executed — the one writer)",
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "aa-propaudit",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-api"
+          },
+          "destination": {
+            "node": "proposal-audit"
+          }
+        }
+      },
+      "description": "XADD every status transition + the approved feed the future executor consumes",
+      "metadata": [
+        {
+          "access": "write"
         }
       ]
     },

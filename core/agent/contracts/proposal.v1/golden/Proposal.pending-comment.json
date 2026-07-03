@@ -1,0 +1,13 @@
+{
+  "id": "prop_1f3a9c04",
+  "subject": "u_jane",
+  "routine": { "id": "rt_issue_triage", "name": "Issue triage", "declared_access": "L2" },
+  "origin": { "unit_id": "agent-u_jane-event-9c2a41f00b", "trigger": "event", "event_ref": "github://vexa-ai/vexa/issues/512" },
+  "level": "L2",
+  "action": "comment",
+  "target": { "provider": "github", "repo": "vexa-ai/vexa", "kind": "issue", "number": 512 },
+  "payload": { "comment": "Duplicate of #498 — the fix landed in v0.11.2; upgrading resolves the reconnect loop." },
+  "rationale": "The stack trace matches #498 exactly (same segfault in the reconnect path) and the reporter runs v0.11.1, which predates the fix.",
+  "status": "pending",
+  "created_at": "2026-06-30T08:12:00Z"
+}

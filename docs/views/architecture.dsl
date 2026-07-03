@@ -39,6 +39,7 @@ system agent  # copilot; owns the processed (cleaned) transcript + signals
   contract event.v1
   contract invoke.v1
   contract proactive-card.v1
+  contract proposal.v1
   contract routine.v1
   contract task.v1
   contract tool.v1
@@ -48,6 +49,8 @@ system agent  # copilot; owns the processed (cleaned) transcript + signals
   data-asset out-stream [writers: agent-worker]
   data-asset unit-in
   data-asset proc-stream [writers: agent-worker]
+  data-asset proposal-queue [writers: agent-api]
+  data-asset proposal-audit [writers: agent-api]
   data-asset va-chat
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
@@ -105,6 +108,9 @@ edges:
   agent-worker -write-> out-stream  # XADD cards/notes/deltas
   agent-worker -write-> proc-stream  # XADD cleaned 1:1 notes
   agent-worker -read-> unit-in  # chat path XREADs interactive input
+  agent-worker -req-> agent-api  # POST /internal/proposals — propose_vcs_action emits proposal.v1, dispatch-token verified (the human-gate seam; no GitHub credential in the worker)
+  agent-api -write-> proposal-queue  # HSET/SADD proposals + pending sets (put/decide/mark_executed — the one writer)
+  agent-api -write-> proposal-audit  # XADD every status transition + the approved feed the future executor consumes
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings
   gateway -req-> agent-api  # proxy /agent/*
   gateway -req-> admin-api  # POST /internal/validate (authz oracle)

@@ -7,3 +7,8 @@ the `mcp` half is how to launch the server. A unit's `unit.v1.tools` names selec
 tools enter the allow-set, `gate` tools attach but are withheld for per-call approval. Adding a tool
 (email, calendar, … thousands) is a descriptor here, never agent-api code. The email tool lands with
 the MVP3 email-service.
+
+First resident: `propose_vcs_action.json` — the proposal-queue emission tool (`worker/tools/proposals_mcp.py`).
+Granted `auto` deliberately: emitting a proposal executes nothing (the human gate is at APPROVAL,
+and the GitHub credential lives with the executor on the other side of it), and it carries no
+`cred_ref` — no secret enters the worker for it (P15).

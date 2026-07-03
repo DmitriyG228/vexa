@@ -1,0 +1,13 @@
+{
+  "tool": {
+    "name": "propose_vcs_action",
+    "scope": "vcs:propose",
+    "grant": "auto",
+    "transport": "mcp",
+    "mcp_server": "vexa-proposals"
+  },
+  "mcp": {
+    "command": "python",
+    "args": ["-m", "worker.tools.proposals_mcp"]
+  }
+}

@@ -53,6 +53,7 @@ COPY core/agent/contracts/unit.v1/unit.schema.json                 ./agent/contr
 COPY core/agent/contracts/routine.v1/routine.schema.json           ./agent/contracts/routine.v1/routine.schema.json
 COPY core/agent/contracts/event.v1/event.schema.json               ./agent/contracts/event.v1/event.schema.json
 COPY core/agent/contracts/tool.v1/tool.schema.json                 ./agent/contracts/tool.v1/tool.schema.json
+COPY core/agent/contracts/proposal.v1/proposal.schema.json         ./agent/contracts/proposal.v1/proposal.schema.json
 
 # The runtime kernel spawns this image with this command (profiles.py "agent" profile).
 CMD ["python", "-m", "worker"]

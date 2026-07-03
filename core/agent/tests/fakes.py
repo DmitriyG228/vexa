@@ -5,11 +5,20 @@ real git repo or the runtime kernel, so its logic is proved offline.
 """
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
+import contracts
+from control_plane.proposals import (
+    InvalidTransition,
+    UnknownProposal,
+    check_batch,
+    check_emission,
+)
 from shared.models import AgentAction, WorkspaceWrite
 from shared.ports import (
     AgentDecisionPort,
+    ProposalStorePort,
     RuntimePort,
     WorkspacePort,
     WorkspaceStoragePort,
@@ -172,6 +181,81 @@ class FakeSecretsBroker:
         return FakeBrokeredSecret(
             self._store[secret_name], name=secret_name, scope=scope, subject=subject
         )
+
+
+class FakeProposalStore(ProposalStorePort):
+    """An in-memory ``ProposalStorePort`` — dicts + lists, no redis.
+
+    The STRUCTURAL guards are the production ones (``check_emission`` / ``check_batch`` imported
+    from ``control_plane.proposals``), so an API test through this fake proves the same level
+    binding the redis store enforces — the fake only swaps the transport. ``audit`` / ``approved``
+    lists stand in for the two streams.
+    """
+
+    def __init__(self) -> None:
+        self.proposals: dict[str, dict] = {}
+        self.audit: list[dict] = []      # every transition, in order (the proposal:audit stand-in)
+        self.approved: list[dict] = []   # the proposal:approved feed stand-in
+
+    def put(self, proposal: dict) -> str:
+        p = dict(proposal)
+        p.setdefault("id", f"prop_{uuid.uuid4().hex}")
+        p.setdefault("status", "pending")
+        p.setdefault("created_at", "2026-01-01T00:00:00Z")
+        contracts.validate_proposal(p)
+        check_emission(p)
+        if p["id"] in self.proposals:
+            raise ValueError(f"proposal {p['id']} already exists")
+        self.proposals[p["id"]] = p
+        self.audit.append({"id": p["id"], "from": "-", "to": "pending"})
+        return p["id"]
+
+    def get(self, proposal_id: str) -> dict | None:
+        p = self.proposals.get(proposal_id)
+        return dict(p) if p else None
+
+    def list(self, subject: str, status: str | None = None) -> list[dict]:
+        rows = [dict(p) for p in self.proposals.values()
+                if p["subject"] == subject and (status is None or p["status"] == status)]
+        rows.sort(key=lambda p: (p.get("created_at", ""), p["id"]))
+        return rows
+
+    def decide(self, ids: list[str], approve: bool, by: str, note: str = "") -> list[dict]:
+        if not ids:
+            raise ValueError("decision carries no ids")
+        picked = []
+        for pid in dict.fromkeys(ids):
+            p = self.proposals.get(pid)
+            if p is None:
+                raise UnknownProposal(pid)
+            picked.append(p)
+        check_batch(picked)
+        for p in picked:
+            if p["status"] != "pending":
+                raise InvalidTransition(f"proposal {p['id']} is {p['status']!r}, not pending")
+        to_status = "approved" if approve else "rejected"
+        updated = []
+        for p in picked:
+            p["status"] = to_status
+            p["decision"] = {"by": by, "at": "2026-01-01T00:00:00Z", **({"note": note} if note else {})}
+            self.audit.append({"id": p["id"], "from": "pending", "to": to_status})
+            if approve:
+                self.approved.append(dict(p))
+            updated.append(dict(p))
+        return updated
+
+    def mark_executed(self, proposal_id: str, result: dict) -> dict | None:
+        p = self.proposals.get(proposal_id)
+        if p is None:
+            raise UnknownProposal(proposal_id)
+        if p["status"] != "approved":
+            raise InvalidTransition(f"proposal {proposal_id} is {p['status']!r}, not approved")
+        execution = dict(result or {})
+        execution.setdefault("at", "2026-01-01T00:00:00Z")
+        p["status"] = "failed" if execution.get("error") else "executed"
+        p["execution"] = execution
+        self.audit.append({"id": p["id"], "from": "approved", "to": p["status"]})
+        return dict(p)
 
 
 class FakeBus:
