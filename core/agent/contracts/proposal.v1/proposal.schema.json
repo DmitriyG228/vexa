@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/proposal.v1",
+  "title": "proposal.v1",
+  "description": "The human gate for external VCS actions. An agent routine never touches GitHub: it EMITS a Proposal (what it wants done + why), a HUMAN decides it, and a separate credentialed executor performs only approved proposals. Levels are STRUCTURALLY bound to actions: L2 (comment|label|close|open_issue — annotate, batch-approvable) and L3 (push_branch|open_pr — mutate, per-action approval ONLY). Credentials and the gate sit on opposite sides of the agent (P15): the worker holds no GitHub token, the token-holder executes nothing un-approved — a prompt-injected unit can at worst ASK.",
+  "$defs": {
+    "Routine": {
+      "description": "The emitting routine + the access level it was AUTHORED with. A proposal above its routine's declared_access is rejected at emission (fail-closed).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "declared_access"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "declared_access": { "enum": ["L1", "L2", "L3"], "description": "the routine's authored access ceiling — L1 read-only, L2 annotate, L3 mutate" }
+      }
+    },
+    "Origin": {
+      "description": "Which dispatch emitted this — the audit anchor back to the unit.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit_id"],
+      "properties": {
+        "unit_id": { "type": "string", "description": "the emitting unit's workload id" },
+        "trigger": { "type": "string", "description": "the unit.v1 trigger that fired it (event|scheduled|message|transcription)" },
+        "event_ref": { "type": "string", "description": "opaque ref to the triggering event/source, if any" }
+      }
+    },
+    "Target": {
+      "description": "WHERE the action would land — a provider object, never a credential.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "repo"],
+      "properties": {
+        "provider": { "const": "github" },
+        "repo": { "type": "string", "description": "owner/name" },
+        "kind": { "enum": ["issue", "pr", "branch"] },
+        "number": { "type": "integer", "description": "issue/PR number when kind is issue|pr" },
+        "ref": { "type": "string", "description": "branch/tag ref when kind is branch" }
+      }
+    },
+    "Patch": {
+      "description": "One file change an L3 proposal carries — a unified diff or a full-file content.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string" },
+        "diff": { "type": "string", "description": "unified diff against base" },
+        "content": { "type": "string", "description": "full replacement content (small/new files)" }
+      }
+    },
+    "Payload": {
+      "description": "WHAT the action carries, per action: comment → comment; label → labels; close → optional comment; open_issue → title/body/labels; push_branch → branch/patches/base; open_pr → branch/patches/base + title/body.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "comment": { "type": "string", "description": "comment body (comment; optional closing note on close)" },
+        "labels": { "type": "array", "items": { "type": "string" } },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "branch": { "type": "string", "description": "the branch the patches land on" },
+        "base": { "type": "string", "description": "the base ref the branch/PR forks from" },
+        "patches": { "type": "array", "items": { "$ref": "#/$defs/Patch" } }
+      }
+    },
+    "DecisionRecord": {
+      "description": "The human decision stamped onto the proposal.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by", "at"],
+      "properties": {
+        "by": { "type": "string", "description": "identity.v1 subject of the decider" },
+        "at": { "type": "string", "description": "ISO-8601 timestamp" },
+        "note": { "type": "string" }
+      }
+    },
+    "ExecutionRecord": {
+      "description": "What the (credentialed, separate) executor did with an approved proposal.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "at": { "type": "string", "description": "ISO-8601 timestamp" },
+        "result_url": { "type": "string", "description": "the created comment/issue/PR url" },
+        "sha": { "type": "string", "description": "the pushed commit sha (push_branch/open_pr)" },
+        "error": { "type": "string", "description": "why execution failed (status=failed)" }
+      }
+    },
+    "Proposal": {
+      "description": "One proposed external action. level↔action is a STRUCTURAL binding (the allOf below), not data: an L2 proposal cannot carry a mutating action, and vice versa.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "subject", "level", "action", "target", "payload", "rationale", "status", "created_at"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^prop_[0-9a-f]+$" },
+        "subject": { "type": "string", "description": "identity.v1 subject = the person whose routine proposes (and who decides)" },
+        "routine": { "$ref": "#/$defs/Routine" },
+        "origin": { "$ref": "#/$defs/Origin" },
+        "level": { "enum": ["L2", "L3"], "description": "L2 annotate (batch-approvable) | L3 mutate (per-action only)" },
+        "action": { "enum": ["comment", "label", "close", "open_issue", "push_branch", "open_pr"] },
+        "target": { "$ref": "#/$defs/Target" },
+        "payload": { "$ref": "#/$defs/Payload" },
+        "rationale": { "type": "string", "description": "WHY — the model's case, shown to the approving human" },
+        "status": { "enum": ["pending", "approved", "rejected", "executed", "failed", "expired"] },
+        "decision": { "$ref": "#/$defs/DecisionRecord" },
+        "execution": { "$ref": "#/$defs/ExecutionRecord" },
+        "created_at": { "type": "string", "description": "ISO-8601 timestamp" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "level": { "const": "L2" } } },
+          "then": { "properties": { "action": { "enum": ["comment", "label", "close", "open_issue"] } } }
+        },
+        {
+          "if": { "properties": { "level": { "const": "L3" } } },
+          "then": { "properties": { "action": { "enum": ["push_branch", "open_pr"] } } }
+        }
+      ]
+    },
+    "Decision": {
+      "description": "A batch decision over pending proposals. The decide surface REFUSES any L3 id in a batch — L3 is per-action only (the /{id}/approve path).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ids", "approve"],
+      "properties": {
+        "ids": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^prop_[0-9a-f]+$" } },
+        "approve": { "type": "boolean" },
+        "note": { "type": "string" }
+      }
+    }
+  }
+}

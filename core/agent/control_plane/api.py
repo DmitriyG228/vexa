@@ -7,6 +7,9 @@ A thin FastAPI surface mirroring ``runtime_kernel/api.py``. Routes (the gateway 
   GET  /api/sessions         — list a subject's sessions
   GET  /api/routines …       — routines (compile to schedule.v1 cron jobs)
   POST /events               — the generic event ingress (event.v1 → unit.v1)
+  GET  /api/proposals …      — the proposal queue (proposal.v1 — the human gate for VCS actions)
+  POST /api/proposals/decide — batch L2 decision; POST /api/proposals/{id}/approve|reject — per-action
+  POST /internal/proposals   — the worker-side emission sink (dispatch-token verified)
   GET  /api/workspace/…      — read the workspace tree/file
   GET  /health               — liveness
 
@@ -37,7 +40,8 @@ from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from control_plane.workspace_attach import CloneError, attached_workspaces, rename_workspace, swap_workspace
 from control_plane.dispatch import Dispatcher
 from control_plane.events import event_to_invocation
-from shared.ports import SchedulerPort, StreamReader
+from control_plane import proposals as proposals_mod
+from shared.ports import ProposalStorePort, SchedulerPort, StreamReader
 from control_plane.workspace_reader import WorkspaceReader
 
 logger = logging.getLogger("agent_api.api")
@@ -233,6 +237,21 @@ class WorkspaceRenameBody(BaseModel):
     name: Optional[str] = None
 
 
+class ProposalDecideBody(BaseModel):
+    """Body for POST /api/proposals/decide — the BATCH (L2-only) half of the human gate. Mirrors
+    proposal.v1's ``Decision`` shape; the server refuses any L3 id here (per-action only)."""
+    model_config = {"extra": "forbid"}
+    ids: list[str]
+    approve: bool
+    note: Optional[str] = None
+
+
+class ProposalNoteBody(BaseModel):
+    """Body for the per-action approve/reject — just an optional decision note."""
+    model_config = {"extra": "forbid"}
+    note: Optional[str] = None
+
+
 class MeetingStart(BaseModel):
     """Launch a live-meeting copilot for a REAL meeting. The vexa-cloud bridge POSTs this once it has a
     bot in the meeting; the dispatch then tails ``tc:meeting:{native_id}`` (the stream the bridge feeds)."""
@@ -365,6 +384,8 @@ def create_app(
     scheduler: Optional[SchedulerPort] = None,
     invocations_url: Optional[str] = None,
     redis_url: Optional[str] = None,
+    proposals: Optional[ProposalStorePort] = None,
+    token_verifier: Optional[proposals_mod.TokenVerifier] = None,
 ) -> FastAPI:
     if sessions is not None:
         sess = sessions
@@ -374,6 +395,10 @@ def create_app(
         sess = _Sessions(_redis.from_url(redis_url, decode_responses=True))
     else:
         sess = _Sessions()
+    if proposals is None and redis_url:
+        import redis as _redis
+
+        proposals = proposals_mod.RedisProposalStore(_redis.from_url(redis_url, decode_responses=True))
     live = _LiveMeetings()
     wsr = reader or WorkspaceReader("/workspaces")
     app = FastAPI(title="vexa-agent-api", version="0.12.0")
@@ -660,6 +685,122 @@ def create_app(
         workload_id = dispatcher.dispatch(invocation)
         return {"workload_id": workload_id, "trigger": invocation["trigger"]}
 
+    # ── proposals — the HUMAN GATE (proposal.v1): routines EMIT proposed VCS actions, a human
+    #    decides, a separate credentialed executor (future) consumes proposal:approved. L2
+    #    (comment/label/close/open_issue) is batch-approvable; L3 (push_branch/open_pr) is
+    #    per-action ONLY — enforced structurally at emission (put) AND at decision (here) ──
+    def _proposal_store() -> ProposalStorePort:
+        if proposals is None:
+            raise HTTPException(status_code=501, detail="proposal store not wired")
+        return proposals
+
+    def _owned_proposal(store: ProposalStorePort, proposal_id: str, subject: str) -> dict:
+        """The subject's proposal by id — another subject's id answers 404, never 403 (don't
+        leak existence across the partition, P20)."""
+        p = store.get(proposal_id)
+        if p is None or p.get("subject") != subject:
+            raise HTTPException(status_code=404, detail="unknown proposal")
+        return p
+
+    @app.get("/api/proposals")
+    def list_proposals(request: Request, status: str = "pending"):
+        """The subject's queue, grouped by (routine, level) — the approval surface's shape: one
+        L2 group is one batch-approve card; every L3 proposal stands alone (per-action)."""
+        rows = _proposal_store().list(subject_of(request), status)
+        groups: dict[tuple, dict] = {}
+        for p in rows:
+            routine = p.get("routine") or {}
+            key = (routine.get("id") or routine.get("name") or "", p["level"])
+            group = groups.setdefault(key, {
+                "routine": routine, "level": p["level"],
+                "batch_approvable": p["level"] == "L2", "proposals": [],
+            })
+            group["proposals"].append(p)
+        return {"status": status, "groups": list(groups.values())}
+
+    @app.get("/api/proposals/{proposal_id}")
+    def get_proposal(proposal_id: str, request: Request):
+        return _owned_proposal(_proposal_store(), proposal_id, subject_of(request))
+
+    def _decide(store: ProposalStorePort, ids: list[str], approve: bool, by: str, note: str) -> list[dict]:
+        try:
+            return store.decide(ids, approve, by=by, note=note)
+        except proposals_mod.ProposalViolation as e:      # L3 in a batch — the structural gate
+            raise HTTPException(status_code=403, detail=str(e))
+        except proposals_mod.UnknownProposal as e:
+            raise HTTPException(status_code=404, detail=f"unknown proposal {e.args[0]}")
+        except proposals_mod.InvalidTransition as e:      # already decided/executed
+            raise HTTPException(status_code=409, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/api/proposals/decide")
+    def decide_proposals(body: ProposalDecideBody, request: Request):
+        """The BATCH decision (the L2 bulk-approve UX). ANY L3 id here is a 403 — a mutation is
+        approved one deliberate act at a time, at /api/proposals/{id}/approve, never in bulk."""
+        store = _proposal_store()
+        subject = subject_of(request)
+        if not body.ids:
+            raise HTTPException(status_code=400, detail="decision carries no ids")
+        for pid in dict.fromkeys(body.ids):
+            p = _owned_proposal(store, pid, subject)
+            if p["level"] == "L3":
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"{pid} is L3 ({p['action']}) — per-action approval only, never a batch",
+                )
+        decided = _decide(store, list(body.ids), body.approve, subject, body.note or "")
+        return {"approve": body.approve, "decided": decided}
+
+    def _decide_one(proposal_id: str, approve: bool, request: Request, note: Optional[str]) -> dict:
+        store = _proposal_store()
+        subject = subject_of(request)
+        _owned_proposal(store, proposal_id, subject)
+        return _decide(store, [proposal_id], approve, subject, note or "")[0]
+
+    @app.post("/api/proposals/{proposal_id}/approve")
+    def approve_proposal(proposal_id: str, request: Request,
+                         body: ProposalNoteBody = Body(default=ProposalNoteBody())):
+        """Per-action approval — the ONLY path an L3 (push_branch/open_pr) goes through (a single
+        L2 works here too)."""
+        return _decide_one(proposal_id, True, request, body.note)
+
+    @app.post("/api/proposals/{proposal_id}/reject")
+    def reject_proposal(proposal_id: str, request: Request,
+                        body: ProposalNoteBody = Body(default=ProposalNoteBody())):
+        return _decide_one(proposal_id, False, request, body.note)
+
+    @app.post("/internal/proposals", status_code=201)
+    def internal_proposals(request: Request, proposal: dict = Body(...)):
+        """The worker-side emission sink (the ``propose_vcs_action`` tool POSTs here). AUTH is the
+        per-dispatch identity token (``Authorization: Bearer …`` — the token the dispatcher minted
+        and the runtime injected): agent-api VERIFIES the HS256 signature (the boundary-verification
+        counterpart of mint) and requires the token's ``sub`` to equal the proposal's ``subject`` —
+        a worker proposes only AS the person it was dispatched for. Missing/forged/expired → 401;
+        subject mismatch → 403; a level/access violation → 403 (the emission-side structural gate)."""
+        store = _proposal_store()
+        if token_verifier is None:
+            raise HTTPException(status_code=501, detail="identity verifier not wired")
+        auth = request.headers.get("authorization") or ""
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        if not token:
+            raise HTTPException(status_code=401, detail="missing dispatch token")
+        try:
+            claims = token_verifier.verify(token)
+        except ValueError as e:
+            raise HTTPException(status_code=401, detail=f"invalid dispatch token: {e}")
+        if not proposal.get("subject") or claims.get("sub") != proposal.get("subject"):
+            raise HTTPException(status_code=403, detail="dispatch token subject does not match the proposal's subject")
+        try:
+            proposal_id = store.put(proposal)
+        except proposals_mod.ProposalViolation as e:
+            raise HTTPException(status_code=403, detail=str(e))
+        except ValidationError as e:  # non-conformant proposal.v1 — fail loud (P18)
+            raise HTTPException(status_code=400, detail=f"invalid proposal.v1: {e.message}")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"id": proposal_id}
+
     @app.get("/api/workspace/tree")
     def ws_tree(request: Request, hidden: bool = False):
         return {"files": wsr.tree(subject_of(request), hidden=hidden)}
@@ -899,6 +1040,9 @@ def _build_production_app() -> FastAPI:
         scheduler=scheduler,
         invocations_url=invocations_url,
         redis_url=settings.redis_url,
+        # The proposal store is built from redis_url inside create_app; the sink verifies the
+        # per-dispatch token with the SAME key identity mints with (mint/verify — one adapter).
+        token_verifier=identity,
     )
     app.state.workspace_routine_reconciler = start_workspace_routine_reconciler(
         scheduler=scheduler,

@@ -20,6 +20,8 @@ Python because the agent domain is the LLM/tooling + runtime ecosystem (P13).
 | consumes | terminal | `POST /api/routines`, `GET /api/routines`, `DELETE /api/routines/{id}` | a `routine.v1` → a `schedule.v1` cron job |
 | consumes | bridge / terminal | `POST /api/meeting/{start,bot,stop}`, `GET /api/meetings/live`, `GET /api/meeting/stream` | launch/stop a live-meeting copilot; SSE merge of transcript + copilot out |
 | consumes | terminal | `GET /api/workspace/{tree,file,git}` | workspace tree, file content, git state |
+| consumes | gateway / terminal | `GET /api/proposals[/{id}]`, `POST /api/proposals/decide`, `POST /api/proposals/{id}/{approve,reject}` | the `proposal.v1` human gate: queue grouped by (routine, level); L2 batch decision; L3 per-action only |
+| consumes | agent-worker | `POST /internal/proposals` | a `proposal.v1` emission, verified against the per-dispatch identity token (`sub` = the proposal's subject) |
 | calls | runtime kernel | `runtime.v1` (Dispatcher → RuntimePort) | the worker container `env` (repo URL + scoped token) |
 | calls | gateway / meeting-api | `POST /bots`, `DELETE /bots/{platform}/{native_id}` | forward our self-hosted bot in/out of a meeting |
 | consumes | self-hosted bots | redis stream `transcription_segments` | live segments, tailed by `transcription_watcher` |
@@ -29,7 +31,7 @@ Python because the agent domain is the LLM/tooling + runtime ecosystem (P13).
 ## Contracts
 
 **Owns:** `core/agent/contracts/unit.v1`, `event.v1`, `invoke.v1`, `routine.v1`, `tool.v1`,
-`task.v1`, `proactive-card.v1`, `workspace.v1` (the agent domain's contracts).
+`task.v1`, `proactive-card.v1`, `proposal.v1`, `workspace.v1` (the agent domain's contracts).
 **Consumes:** `core/runtime/contracts/runtime.v1` + `schedule.v1`, `core/meetings/contracts/transcript.v1`,
 `core/identity/contracts/identity.v1`, `core/gateway/contracts/api.v1`. Schemas are read by path and
 jsonschema-validated — never importing neighbour code. All sealed in `contracts.seal.json` (repo root).
@@ -54,6 +56,10 @@ uv run pytest -q        # uv manages this package's own venv/deps
 - ✅ delivered — `/api/meeting/{start,bot,stop,stream}`, `/api/meetings/live` live-copilot surface
 - ✅ delivered — `transcription_watcher`: fan `transcription_segments` → `tc:meeting:{uid}` + spawn copilot
 - ✅ delivered — `/api/workspace/{tree,file,git}` reads
+- ✅ delivered — the `proposal.v1` human gate: token-verified `/internal/proposals` emission sink,
+  `/api/proposals` queue (grouped routine × level), L2 batch `/decide` (refuses any L3 id),
+  L3 per-action `/{id}/approve|reject`, append-only `proposal:audit` + the `proposal:approved`
+  executor feed. The credentialed EXECUTOR consuming approvals is ⬜ planned (a follow-up PR).
 - ✅ delivered — in-container worker (`serve` / `serve_meeting`)
 - ✅ delivered — multi-session chat: real conversation threads keyed `agent-{subject}-chat-{session}`
   (default `main`, back-compat), per-thread continuity file (`.claude/sessions/{session}.session`,

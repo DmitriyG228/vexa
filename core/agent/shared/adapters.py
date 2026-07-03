@@ -208,6 +208,10 @@ def _b64u(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
+def _b64u_decode(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
 def _signing_key(key: str | bytes) -> bytes:
     return key.encode("utf-8") if isinstance(key, str) else key
 
@@ -250,6 +254,34 @@ class LocalIdentityMinter(IdentityPort):
         signing_input = f"{_b64u(_canon(header))}.{_b64u(_canon(payload))}"
         sig = hmac.new(_signing_key(self._key), signing_input.encode("ascii"), hashlib.sha256).digest()
         return f"{signing_input}.{_b64u(sig)}"
+
+    def verify(self, token: str) -> dict:
+        """The boundary-verification counterpart of ``mint`` (the IdentityPort docstring's "every
+        boundary VERIFIES it" — the Stage-2 seam): check the HS256 signature with the shared key +
+        the expiry, return the DispatchClaims. Used by agent-api's ``/internal/proposals`` sink to
+        prove the caller IS the dispatched worker (``sub`` = the person it may propose as).
+
+        Raises ``ValueError`` on a malformed / forged / expired token — the caller maps that to 401.
+        """
+        parts = token.split(".")
+        if len(parts) != 3:
+            raise ValueError("malformed dispatch token")
+        header_b64, payload_b64, sig_b64 = parts
+        signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+        expected = hmac.new(_signing_key(self._key), signing_input, hashlib.sha256).digest()
+        try:
+            presented = _b64u_decode(sig_b64)
+        except Exception:
+            raise ValueError("malformed dispatch token signature")
+        if not hmac.compare_digest(expected, presented):
+            raise ValueError("dispatch token signature does not verify")
+        try:
+            claims = json.loads(_b64u_decode(payload_b64))
+        except Exception:
+            raise ValueError("malformed dispatch token payload")
+        if int(claims.get("exp", 0)) < time.time():
+            raise ValueError("dispatch token expired")
+        return claims
 
 
 class RedisStreamReader(StreamReader):

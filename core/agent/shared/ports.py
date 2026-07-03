@@ -166,6 +166,43 @@ class VcsPort(Protocol):
 
 
 @runtime_checkable
+class ProposalStorePort(Protocol):
+    """The proposal queue — the HUMAN GATE for external VCS actions (``proposal.v1``).
+
+    A routine's worker EMITS proposals (``put``); a human DECIDES them (``decide``); a separate,
+    credentialed executor consumes the approved feed and reports back (``mark_executed``). The
+    credential and the gate sit on opposite sides of the agent (P15): no GitHub token ever enters
+    the worker, and the token-holder acts only on approved proposals. The level↔action binding is
+    STRUCTURAL — enforced at ``put`` (an action outside its level, or above the emitting routine's
+    ``declared_access``, is rejected) and at ``decide`` (an L3 id never rides a multi-proposal
+    batch — mutations are approved one deliberate act at a time).
+    """
+
+    def put(self, proposal: dict) -> str:
+        """Store a conformant, structurally-valid PENDING proposal; return its id. Raises on a
+        non-conformant envelope or a level/access violation (fail-closed)."""
+        ...
+
+    def get(self, proposal_id: str) -> Optional[dict]:
+        """Return the full proposal by id, or None if unknown."""
+        ...
+
+    def list(self, subject: str, status: Optional[str] = None) -> list[dict]:
+        """The subject's proposals (optionally filtered by status), oldest first."""
+        ...
+
+    def decide(self, ids: list[str], approve: bool, by: str, note: str = "") -> list[dict]:
+        """Apply one human decision to pending proposals; return the updated ones. Raises when the
+        batch carries an L3 id alongside others, an id is unknown, or a proposal isn't pending."""
+        ...
+
+    def mark_executed(self, proposal_id: str, result: dict) -> Optional[dict]:
+        """The executor's report-back: stamp the execution record onto an APPROVED proposal
+        (``executed``, or ``failed`` when the result carries an error); return the updated proposal."""
+        ...
+
+
+@runtime_checkable
 class TranscriptSource(Protocol):
     """Yield validated ``transcript.v1`` segments.
 

@@ -26,6 +26,7 @@ _UNIT_SCHEMA = Path("agent/contracts/unit.v1/unit.schema.json")
 _ROUTINE_SCHEMA = Path("agent/contracts/routine.v1/routine.schema.json")
 _EVENT_SCHEMA = Path("agent/contracts/event.v1/event.schema.json")
 _TOOL_SCHEMA = Path("agent/contracts/tool.v1/tool.schema.json")
+_PROPOSAL_SCHEMA = Path("agent/contracts/proposal.v1/proposal.schema.json")
 
 
 def _repo_root() -> Path:
@@ -119,3 +120,19 @@ def validate_event(payload: dict) -> None:
 def validate_tool(payload: dict) -> None:
     """Validate a ``tool.v1`` Tool descriptor (name, grant auto|gate, transport, cred ref, barriers)."""
     _validator(_TOOL_SCHEMA, "Tool").validate(payload)
+
+
+# ── proposal.v1 (the human gate — proposed external VCS actions) ─────────────
+
+def validate_proposal(payload: dict) -> None:
+    """Validate a ``proposal.v1`` Proposal (a proposed external VCS action awaiting the human gate).
+
+    The schema itself carries the structural level↔action binding (an L2 proposal cannot name a
+    mutating action), so a mislabeled proposal is non-conformant as data.
+    """
+    _validator(_PROPOSAL_SCHEMA, "Proposal").validate(payload)
+
+
+def validate_proposal_decision(payload: dict) -> None:
+    """Validate a ``proposal.v1`` Decision (a batch human decision over pending proposal ids)."""
+    _validator(_PROPOSAL_SCHEMA, "Decision").validate(payload)

@@ -33,7 +33,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     env = {
         "VEXA_OWNER": subject,                                    # quota + cred-brokerage axis = the person
         "VEXA_LAUNCHER": identity["launcher"],
-        "VEXA_AGENT_IDENTITY_TOKEN": token,                      # the per-dispatch SIGNED token (minted now; boundary verification lands in Stage 2)
+        "VEXA_AGENT_IDENTITY_TOKEN": token,                      # the per-dispatch SIGNED token (minted here; agent-api VERIFIES it at /internal/proposals — full Stage-2 boundary verification extends from that seam)
         "VEXA_RUNNER": invocation.get("runner", "claude-code"),
         "VEXA_UNIT_ID": unit_id,
         "VEXA_UNIT_TRIGGER": invocation["trigger"],
@@ -45,6 +45,9 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         "VEXA_WORKSPACE_MOUNT_TARGET": root,                      # where the Runtime binds it in the container
         "VEXA_WORKSPACE_PATH": f"{root}/{subject}",               # the worker's cwd (the subject's rw folder)
         "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
+        # The control plane's own front door, for the worker-side emission tools (propose_vcs_action
+        # POSTs proposal.v1 Proposals to $VEXA_AGENT_API_URL/internal/proposals with the token above).
+        "VEXA_AGENT_API_URL": settings.agent_api_self_url,
         "REDIS_URL": settings.redis_url,
     }
     if settings.agent_model:

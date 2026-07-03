@@ -36,6 +36,7 @@ flowchart LR
   meeting_api -->|"HTTPS"| minio
   meeting_api -->|"HTTPS"| runtime
   agent_api -->|"HTTPS"| runtime
+  agent_worker -->|"HTTPS"| agent_api
   gateway -->|"HTTPS"| meeting_api
   gateway -->|"HTTPS"| agent_api
   gateway -->|"HTTPS"| admin_api
