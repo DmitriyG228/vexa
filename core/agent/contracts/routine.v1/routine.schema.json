@@ -11,7 +11,8 @@
       "properties": {
         "kind": { "enum": ["scheduled", "event"] },
         "cron": { "type": "string", "description": "cron expression when kind=scheduled (compiled to a schedule.v1 job)" },
-        "event": { "type": "string", "description": "event name when kind=event, e.g. email.received" }
+        "event": { "type": "string", "description": "event name when kind=event, e.g. email.received | vcs.issue.opened" },
+        "repo": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$", "description": "provider repo the subscription binds to (owner/name) when kind=event and the event is vcs.* — the vcs:subs subscription key" }
       }
     },
     "Routine": {
@@ -33,6 +34,7 @@
             "prompt": { "type": "string", "description": "inline plan prompt (when no plan doc is authored)" }
           }
         },
+        "access": { "enum": ["L1", "L2", "L3"], "default": "L1", "description": "the routine's authored access ceiling — rides emission as proposal.v1 declared_access (L1 read-only: may not propose; L2 annotate; L3 mutate). Default L1, fail-closed." },
         "lifecycle": { "enum": ["oneshot", "warm"], "default": "oneshot" },
         "enabled": { "type": "boolean", "default": true }
       }

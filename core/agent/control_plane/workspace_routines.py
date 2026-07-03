@@ -1,9 +1,11 @@
 """Workspace-authored routines reconciled onto the durable runtime scheduler.
 
 The authoring surface is a visible workspace file: ``routines/<name>.md`` with YAML
-frontmatter plus optional natural-language body. The runtime scheduler remains the execution
-mechanism; this module only reads governed workspace config and compiles it through
-``routines.make_routine`` / ``compile_to_job``.
+frontmatter plus optional natural-language body. A ``cron:`` routine compiles to a durable
+schedule.v1 job (``routines.make_routine`` / ``compile_to_job``); an ``on: vcs.*`` routine
+(routine.v1 ``kind: event`` made real) compiles to a ``vcs:subs`` subscription record instead
+(``vcs_subscriptions``) — agent-api stays the ONE writer of that hash, the vcs ingress only
+reads it. Enable/disable/change/remove reconcile with the same care on both paths.
 """
 from __future__ import annotations
 
@@ -19,7 +21,9 @@ from typing import Optional
 
 import yaml
 
+import contracts
 from control_plane import routines as routines_mod
+from control_plane import vcs_subscriptions as vcs_subs_mod
 from shared.ports import SchedulerPort
 
 log = logging.getLogger(__name__)
@@ -49,6 +53,10 @@ _MONTHS = {
 _DAYS = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
 
 
+_ACCESS_LEVELS = ("L1", "L2", "L3")
+_REPO_RE = re.compile(r"^[^/\s]+/[^/\s]+$")
+
+
 @dataclass(frozen=True)
 class RoutineFile:
     """The resolved workspace routine file."""
@@ -58,6 +66,11 @@ class RoutineFile:
     cron: str
     prompt: str
     path: Path
+    # Event-binding (routine.v1 kind=event): `on:` the event name, `repo:` the owner/name the
+    # subscription binds to, `access:` the authored proposal ceiling (default L1, fail-closed).
+    on: str = ""
+    repo: str = ""
+    access: str = "L1"
 
 
 @dataclass(frozen=True)
@@ -70,6 +83,10 @@ class ReconcileResult:
     kept: int = 0
     cancelled: int = 0
     skipped: int = 0
+    # Event-subscription counters (the vcs:subs path) — mirror scheduled/kept/cancelled.
+    subscribed: int = 0
+    sub_kept: int = 0
+    unsubscribed: int = 0
 
 
 @dataclass(frozen=True)
@@ -129,6 +146,12 @@ def _string_value(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _on_value(fm: dict) -> str:
+    """The ``on:`` frontmatter key. PyYAML speaks YAML 1.1, where a bare ``on`` key parses as
+    boolean ``True`` — accept both that and an explicitly quoted ``"on"`` key."""
+    return _string_value(fm.get("on", fm.get(True)))
+
+
 def _routine_card_from_file(path: Path, *, subject: str, job_card: Optional[dict] = None) -> dict:
     label = path.as_posix()
     try:
@@ -138,6 +161,7 @@ def _routine_card_from_file(path: Path, *, subject: str, job_card: Optional[dict
     fm, body = _split_frontmatter(text, label=label)
     enabled = _as_bool(fm.get("enabled"), True, label=label)
     cron = _string_value(fm.get("cron"))
+    on = _on_value(fm)
     prompt = _string_value(fm.get("prompt"))
     plan_parts = [prompt] if prompt else []
     if body:
@@ -152,7 +176,15 @@ def _routine_card_from_file(path: Path, *, subject: str, job_card: Optional[dict
         "routine_name": name,
         "enabled": enabled,
     })
-    card.setdefault("kind", "scheduled")
+    if on:
+        card["kind"] = "event"
+        card["on"] = on
+        repo = _string_value(fm.get("repo"))
+        if repo:
+            card["repo"] = repo
+        card["access"] = _string_value(fm.get("access")) or "L1"
+    else:
+        card.setdefault("kind", "scheduled")
     card.setdefault("lifecycle", "oneshot")
     card["cron"] = cron or card.get("cron")
     if plan_parts or "plan_summary" not in card:
@@ -288,8 +320,10 @@ def _valid_cron(expr: str) -> bool:
 def load_routine_file(path: str | Path) -> Optional[RoutineFile]:
     """Parse ``routines/<name>.md`` into a ``RoutineFile``.
 
-    Enabled files require a valid 5-field cron and a non-empty frontmatter ``prompt``. Disabled
-    files are returned even without cron/prompt so reconcile can cancel their existing jobs.
+    Enabled files require a non-empty frontmatter ``prompt`` plus EITHER a valid 5-field ``cron``
+    (a scheduled routine) OR an ``on:`` event name (an event routine — ``on: vcs.*`` also requires
+    a ``repo: owner/name``); carrying both is ambiguous and skipped. Disabled files are returned
+    even without cron/on/prompt so reconcile can cancel their existing jobs/subscriptions.
     Invalid enabled files return ``None`` and log the exact skipped key.
     """
     p = Path(path)
@@ -305,10 +339,32 @@ def load_routine_file(path: str | Path) -> Optional[RoutineFile]:
     if not enabled:
         return RoutineFile(name=p.stem, enabled=False, cron="", prompt="", path=p)
 
+    on = _on_value(fm)
     cron = fm.get("cron")
-    if not isinstance(cron, str) or not cron.strip() or not _valid_cron(cron.strip()):
-        log.warning("%s: invalid cron; skipping routine", label)
+    has_cron = isinstance(cron, str) and cron.strip()
+    if on and has_cron:
+        log.warning("%s: both `on` and `cron` set — ambiguous trigger; skipping routine", label)
         return None
+
+    repo = ""
+    access = "L1"
+    if on:
+        if not on.startswith("vcs."):
+            log.warning("%s: unsupported event %r (only vcs.* binds today); skipping routine", label, on)
+            return None
+        repo = _string_value(fm.get("repo"))
+        if not _REPO_RE.match(repo):
+            log.warning("%s: `on: vcs.*` requires `repo: owner/name`; skipping routine", label)
+            return None
+        raw_access = _string_value(fm.get("access")) or "L1"
+        if raw_access not in _ACCESS_LEVELS:
+            log.warning("%s: invalid access %r (want L1|L2|L3); skipping routine", label, raw_access)
+            return None
+        access = raw_access
+    else:
+        if not has_cron or not _valid_cron(cron.strip()):
+            log.warning("%s: invalid cron; skipping routine", label)
+            return None
 
     prompt = fm.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
@@ -321,9 +377,12 @@ def load_routine_file(path: str | Path) -> Optional[RoutineFile]:
     return RoutineFile(
         name=p.stem,
         enabled=True,
-        cron=cron.strip(),
+        cron=cron.strip() if has_cron else "",
         prompt="\n\n".join(parts),
         path=p,
+        on=on,
+        repo=repo,
+        access=access,
     )
 
 
@@ -367,6 +426,33 @@ def _compile_workspace_job(routine: RoutineFile, *, subject: str, invocations_ur
     return job_spec
 
 
+def _compile_subscription(routine: RoutineFile, *, subject: str) -> dict:
+    """Compile an ``on: vcs.*`` routine into its ``vcs:subs`` record. The authored routine.v1
+    Routine (kind=event trigger + access ceiling) is validated at the seam (P8) before the record
+    is derived, so a non-conformant authoring fails loud here — never half-lands in redis."""
+    routine_id = routine_id_for_workspace_file(subject, routine.name)
+    authored = {
+        "id": routine_id,
+        "owner": subject,
+        "name": routine.name,
+        "trigger": {"kind": "event", "event": routine.on, "repo": routine.repo},
+        "plan": {"prompt": routine.prompt},
+        "access": routine.access,
+        "lifecycle": "oneshot",
+        "enabled": True,
+    }
+    contracts.validate_routine(authored)
+    return vcs_subs_mod.subscription_record(
+        routine_id=routine_id,
+        subject=subject,
+        name=routine.name,
+        event=routine.on,
+        repo=routine.repo,
+        access=routine.access,
+        plan={"prompt": routine.prompt},
+    )
+
+
 def _workspace_jobs(scheduler: SchedulerPort, subject: str) -> dict[str, list[dict]]:
     jobs: dict[str, list[dict]] = defaultdict(list)
     for job in scheduler.list_jobs(limit=1000):
@@ -393,13 +479,17 @@ def reconcile_workspace_routines(
     scheduler: SchedulerPort,
     invocations_url: str,
     workspaces_dir: str | Path = "/workspaces",
+    subscriptions: Optional[vcs_subs_mod.RedisVcsSubscriptionStore] = None,
 ) -> ReconcileResult:
-    """Reconcile ``/workspaces/<subject>/routines/*.md`` onto schedule.v1 jobs."""
+    """Reconcile ``/workspaces/<subject>/routines/*.md`` onto schedule.v1 jobs (``cron:``) and
+    ``vcs:subs`` subscription records (``on:``). One routine id spans both planes, so a routine
+    edited from cron to event (or back) has its stale job/subscription removed in the same pass."""
     ws = _safe_workspace_dir(workspaces_dir, subject)
     routines_dir = ws / ROUTINES_DIR
     paths = sorted(routines_dir.glob("*.md")) if routines_dir.exists() else []
 
     desired: dict[str, dict] = {}
+    desired_subs: dict[str, dict] = {}
     skipped = 0
     for path in paths:
         parsed = load_routine_file(path)
@@ -409,7 +499,14 @@ def reconcile_workspace_routines(
         if not parsed.enabled:
             continue
         rid = routine_id_for_workspace_file(subject, path.stem)
-        desired[rid] = _compile_workspace_job(parsed, subject=subject, invocations_url=invocations_url)
+        if parsed.on:
+            if subscriptions is None:
+                log.warning("%s: event routine but no subscription store wired; skipping", path.as_posix())
+                skipped += 1
+                continue
+            desired_subs[rid] = _compile_subscription(parsed, subject=subject)
+        else:
+            desired[rid] = _compile_workspace_job(parsed, subject=subject, invocations_url=invocations_url)
 
     current = _workspace_jobs(scheduler, subject)
     scheduled = kept = cancelled = 0
@@ -437,6 +534,12 @@ def reconcile_workspace_routines(
         scheduler.schedule(job_spec)
         scheduled += 1
 
+    subscribed = sub_kept = unsubscribed = 0
+    if subscriptions is not None:
+        # The event plane: agent-api (this reconciler) is the ONE writer of vcs:subs — the store
+        # diffs this subject's records against the desired set (add/change/remove, P23).
+        subscribed, sub_kept, unsubscribed = subscriptions.sync_subject(subject, desired_subs)
+
     return ReconcileResult(
         subject=subject,
         scanned=len(paths),
@@ -444,6 +547,9 @@ def reconcile_workspace_routines(
         kept=kept,
         cancelled=cancelled,
         skipped=skipped,
+        subscribed=subscribed,
+        sub_kept=sub_kept,
+        unsubscribed=unsubscribed,
     )
 
 
@@ -459,6 +565,7 @@ def reconcile_all_workspace_routines(
     scheduler: SchedulerPort,
     invocations_url: str,
     workspaces_dir: str | Path = "/workspaces",
+    subscriptions: Optional[vcs_subs_mod.RedisVcsSubscriptionStore] = None,
 ) -> list[ReconcileResult]:
     results: list[ReconcileResult] = []
     for subject in scan_workspace_subjects(workspaces_dir):
@@ -468,6 +575,7 @@ def reconcile_all_workspace_routines(
                 scheduler=scheduler,
                 invocations_url=invocations_url,
                 workspaces_dir=workspaces_dir,
+                subscriptions=subscriptions,
             )
         )
     return results
@@ -479,6 +587,7 @@ def start_workspace_routine_reconciler(
     invocations_url: str,
     workspaces_dir: str | Path = "/workspaces",
     interval_sec: float = 60.0,
+    subscriptions: Optional[vcs_subs_mod.RedisVcsSubscriptionStore] = None,
 ) -> Optional[RoutineReconcilerHandle]:
     """Run one reconcile pass now, then keep scanning mounted workspaces in a daemon thread."""
     if interval_sec <= 0:
@@ -490,6 +599,7 @@ def start_workspace_routine_reconciler(
                 scheduler=scheduler,
                 invocations_url=invocations_url,
                 workspaces_dir=workspaces_dir,
+                subscriptions=subscriptions,
             )
             for result in results:
                 log.info("workspace routines reconciled: %s", result)

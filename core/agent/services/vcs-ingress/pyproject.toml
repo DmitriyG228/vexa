@@ -1,0 +1,25 @@
+[project]
+name = "vexa-vcs-ingress"
+version = "0.12.0"
+description = "The untrusted-event ingress (v0.12) — a FastAPI service that receives GitHub App webhooks (attacker-influenceable input), verifies X-Hub-Signature-256 (stdlib hmac, constant-time), persists ingress.v1 Delivery records to the vcs:events redis stream (persist-first), and dispatches event.v1 envelopes carrying OPAQUE refs only to agent-api /events per vcs:subs subscription. No payload bytes cross the seam; agent-api is the only writer of vcs:subs."
+requires-python = ">=3.11"
+dependencies = [
+    # The HTTP front door (MIT) + the dispatch transport (BSD-3).
+    "fastapi>=0.110,<1",
+    "httpx>=0.27,<1",
+    # Dedupe SET NX + the vcs:events stream + the vcs:subs read view (MIT).
+    "redis>=5,<6",
+    # Test harness (in-process, no network/docker): fake agent-api via httpx.MockTransport,
+    # fake redis via fakeredis, and schema-by-path conformance (ingress.v1 + event.v1, P4/P8).
+    "pytest>=8",
+    "fakeredis>=2.20,<3",
+    "jsonschema>=4,<5",
+    "referencing>=0.30,<0.40",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]

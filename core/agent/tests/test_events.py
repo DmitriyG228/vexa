@@ -89,3 +89,20 @@ def test_events_endpoint_dispatches():
 
     # No plan → 422 (fail loud), never a silent default.
     assert client.post("/events", json={"name": "x.happened", "subject": "u_jane"}).status_code == 422
+
+
+def test_vcs_event_maps_to_vcs_context_and_ro_mount():
+    """A vcs.* event (the GitHub webhook ingress) grounds the unit in kind=vcs with the OPAQUE
+    github:// ref, launches as integration:vcs, and — being untrusted external input — mounts the
+    workspace ro (propose-only; the worst case is a proposal, never an action)."""
+    event = {
+        "name": "vcs.issue.opened", "subject": "u_jane",
+        "source": {"uri": "github://vexa-ai/vexa/issues/512"},
+        "plan": {"prompt": "Fetch the issue at the event ref with your read-only vcs tool and triage it."},
+    }
+    inv = events.event_to_invocation(event)
+    contracts.validate_unit_invocation(inv)
+    assert inv["trigger"] == "event"
+    assert inv["context"] == {"kind": "vcs", "ref": {"uri": "github://vexa-ai/vexa/issues/512"}}
+    assert inv["identity"]["launcher"] == "integration:vcs"
+    assert inv["workspaces"] == [{"id": "u_jane", "mode": "ro"}]  # untrusted ⇒ propose-only (ro)

@@ -32,6 +32,11 @@ def event_to_invocation(event: dict, *, workspace_ref: str = "main") -> dict:
     if event.get("meeting"):
         context = {"kind": "meeting", "meeting": dict(event["meeting"])}
         launcher = "integration:meetings"
+    elif name.startswith("vcs.") and event.get("source"):
+        # A VCS event (a GitHub webhook, via vcs-ingress) — the opaque github:// ref only; the
+        # unit re-fetches content with a read-only tool (no payload bytes crossed the seam).
+        context = {"kind": "vcs", "ref": dict(event["source"])}
+        launcher = "integration:vcs"
     elif event.get("source"):
         context = {"kind": "generic", "ref": dict(event["source"])}
         launcher = f"integration:{name.split('.')[0]}"

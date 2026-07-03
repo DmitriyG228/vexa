@@ -1,0 +1,13 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 731,
+    "title": "feat: capture kit extraction",
+    "body": "Extracts the capture kit into its own brick.",
+    "user": { "login": "octocat" },
+    "head": { "ref": "feat/capture-kit" },
+    "base": { "ref": "main" }
+  },
+  "repository": { "full_name": "vexa-ai/vexa", "private": false },
+  "sender": { "login": "octocat" }
+}

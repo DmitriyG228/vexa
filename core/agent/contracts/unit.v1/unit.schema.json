@@ -60,7 +60,7 @@
       "additionalProperties": false,
       "required": ["kind"],
       "properties": {
-        "kind": { "enum": ["none", "meeting", "email", "generic"] },
+        "kind": { "enum": ["none", "meeting", "email", "generic", "vcs"] },
         "meeting": { "$ref": "#/$defs/MeetingRef" },
         "ref": { "$ref": "#/$defs/SourceRef" }
       }

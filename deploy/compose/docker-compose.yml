@@ -241,6 +241,41 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  # vcs-ingress — the UNTRUSTED-EVENT INGRESS: GitHub App webhooks (attacker-influenceable input)
+  # are signature-verified, persisted to the vcs:events stream (persist-first), and dispatched to
+  # agent-api /events as OPAQUE refs only — no payload bytes cross the seam (the agent unit
+  # re-fetches content via read-only tools; event-triggered units mount the workspace ro).
+  # Bound to localhost like every service: PRODUCTION EXPOSURE TO GITHUB IS A REVERSE-PROXY
+  # CONCERN (TLS + a public route to /webhooks/github), not this compose file's.
+  vcs-ingress:
+    build:
+      context: ../../core/agent/services/vcs-ingress
+      dockerfile: Dockerfile
+    image: vexaai/v012-vcs-ingress:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${VCS_INGRESS_HOST_PORT:-18020}:8020"
+    environment:
+      # The GitHub App shared secret — absent ⇒ the webhook route fails closed (503).
+      - VEXA_GITHUB_WEBHOOK_SECRET=${VEXA_GITHUB_WEBHOOK_SECRET:-}
+      - VEXA_AGENT_API_URL=http://agent-api:8100
+      - REDIS_URL=redis://redis:6379/0
+      - PORT=8020
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8020/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      redis:
+        condition: service_healthy
+      agent-api:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
   meeting-api:
     build:
       # Wider context (the v0.12 carve root) than the other services: meeting_api validates at the

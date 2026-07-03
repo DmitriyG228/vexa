@@ -1166,6 +1166,92 @@
       ]
     },
     {
+      "unique-id": "vcs-ingress",
+      "node-type": "service",
+      "name": "vcs-ingress",
+      "description": "untrusted-event ingress: GitHub webhooks verified + persisted, dispatched to agent-api as OPAQUE refs only (no payload bytes cross the seam)",
+      "metadata": [
+        {
+          "path": "core/agent/services/vcs-ingress",
+          "domain": "agent"
+        }
+      ],
+      "interfaces": [
+        {
+          "unique-id": "vcs-ingress-rest",
+          "type": "api"
+        }
+      ]
+    },
+    {
+      "unique-id": "ingress.v1",
+      "node-type": "contract",
+      "name": "ingress.v1",
+      "description": "ingress.v1 — sealed/published contract (agent)",
+      "metadata": [
+        {
+          "path": "core/agent/contracts/ingress.v1",
+          "domain": "agent"
+        }
+      ]
+    },
+    {
+      "unique-id": "vcs-events",
+      "node-type": "data-asset",
+      "name": "vcs:events (stream)",
+      "description": "the persist-first ingress.v1 Delivery log (MAXLEN ~10000): every verified GitHub delivery lands here BEFORE dispatch, digest-anchored, payload never re-stored; /internal/replay re-runs from it",
+      "controls": {
+        "ownership": {
+          "description": "single writer (P23)",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "vcs-ingress"
+                ],
+                "match": "vcs:events",
+                "op": "xadd"
+              }
+            }
+          ]
+        }
+      },
+      "metadata": [
+        {
+          "contract": "ingress.v1"
+        }
+      ]
+    },
+    {
+      "unique-id": "vcs-subs",
+      "node-type": "data-asset",
+      "name": "vcs:subs (hash)",
+      "description": "repo -> [(subject, plan, access)] subscription view: agent-api's workspace-routine reconciler compiles `on: vcs.*` routines into it (the ONE writer); vcs-ingress only reads it to fan deliveries out",
+      "controls": {
+        "ownership": {
+          "description": "single writer (P23)",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "agent-api"
+                ],
+                "match": "vcs:subs",
+                "op": "hset"
+              }
+            }
+          ]
+        }
+      },
+      "metadata": [
+        {
+          "contract": "routine.v1"
+        }
+      ]
+    },
+    {
       "unique-id": "va-chat",
       "node-type": "data-asset",
       "name": "va:meeting:{id}:chat (pubsub)",
@@ -1201,7 +1287,9 @@
           "container": "agent",
           "nodes": [
             "agent-api",
+            "vcs-ingress",
             "event.v1",
+            "ingress.v1",
             "invoke.v1",
             "proactive-card.v1",
             "proposal.v1",
@@ -1216,6 +1304,8 @@
             "proc-stream",
             "proposal-queue",
             "proposal-audit",
+            "vcs-events",
+            "vcs-subs",
             "va-chat"
           ]
         }
@@ -1952,6 +2042,93 @@
       ]
     },
     {
+      "unique-id": "vi-aa",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vcs-ingress"
+          },
+          "destination": {
+            "node": "agent-api",
+            "interface": "agent-api-rest"
+          }
+        }
+      },
+      "description": "POST /events — one event.v1 envelope per matching subscription: OPAQUE github:// ref + the routine's plan, never payload bytes",
+      "protocol": "HTTPS"
+    },
+    {
+      "unique-id": "vi-redis",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vcs-ingress"
+          },
+          "destination": {
+            "node": "redis"
+          }
+        }
+      },
+      "description": "SET NX delivery-id dedupe + XADD vcs:events (persist-first) + HGET vcs:subs (read-only view)"
+    },
+    {
+      "unique-id": "vi-events",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vcs-ingress"
+          },
+          "destination": {
+            "node": "vcs-events"
+          }
+        }
+      },
+      "description": "XADD one ingress.v1 Delivery per verified webhook BEFORE any dispatch (replay recovers)",
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "vi-subs",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vcs-ingress"
+          },
+          "destination": {
+            "node": "vcs-subs"
+          }
+        }
+      },
+      "description": "HGET repo -> subscriptions to fan a delivery out (never writes)",
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "aa-vcssubs",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "agent-api"
+          },
+          "destination": {
+            "node": "vcs-subs"
+          }
+        }
+      },
+      "description": "HSET/HDEL — the workspace-routine reconciler compiles `on: vcs.*` routines into subscription records (the one writer)",
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
       "unique-id": "gw-ma",
       "relationship-type": {
         "connects": {
@@ -2195,6 +2372,7 @@
             "gateway",
             "meeting-api",
             "agent-api",
+            "vcs-ingress",
             "admin-api",
             "runtime",
             "redis",

@@ -16,6 +16,8 @@ proactive cards, and tool calls.
 | **`task.v1`** | a task's state + its representation as a workspace entity. | no |
 | **`tool.v1`** | a tool/integration grant — `{ scope, grant, cred_ref, transport, barriers }`; injected as `claude --allowedTools` + MCP. | no |
 | **`event.v1`** | an external event (e.g. email, meeting) mapped into a `unit.v1` Invocation — generic event ingress. | no |
+| **`proposal.v1`** | the human gate for external VCS actions — a routine EMITS a proposal, a human decides, a separate credentialed executor performs only approvals. | **yes** |
+| **`ingress.v1`** | the untrusted-event ingress record — one persisted Delivery per verified GitHub webhook (digest-anchored, opaque ref only; no payload bytes cross the seam). | **yes** |
 | **`proactive-card.v1`** | a proactive output card with actions (agent-initiated surface). | no |
 | **`invoke.v1`** | the legacy meetings→agent invocation seam. **Sealed**; retiring as callers move to `unit.v1`. | **yes** |
 
