@@ -1,6 +1,6 @@
-# core — the platform backend (runtime · meetings · agent · identity · gateway)
+# core — the platform backend (runtime · meetings · agent · identity · gateway · ops)
 
-The five backend domains live here so the tree reads itself: **`core/` is the runnable platform**;
+The six backend domains live here so the tree reads itself: **`core/` is the runnable platform**;
 everything else in the repo (`clients/`, `sdks/`, `integrations/`, `deploy/`, `tools/`) consumes it
 across a published contract seam.
 
@@ -11,6 +11,7 @@ across a published contract seam.
 | [`agent/`](agent/) | ③ **execution** — agent-api · sandboxed worker (scoped identity + a mounted workspace) |
 | [`identity/`](identity/) | access · accounts · tokens · audit — authN/authZ |
 | [`gateway/`](gateway/) | the edge — auth · routing · WS fan-out |
+| [`ops/`](ops/) | **platform support** — help-mcp (the public help companion) + the doc-gap telemetry loop; additive, no product domain depends on it |
 
 ## `core/` is an ORGANIZING folder, not a domain
 

@@ -328,6 +328,47 @@ services:
     networks: [vexa]
     restart: unless-stopped
 
+  # help-mcp — the PUBLIC help companion (MCP, core/ops): answers deploy/integration questions
+  # from two always-labeled tiers — "doc" (the docs corpus vendored into the image, cited by
+  # path + heading) and "operational" (live GitHub triage state, 15-min TTL cache). Read-only
+  # v1: its only writes are its own help:questions telemetry stream (redis) and — only when
+  # HELP_GITHUB_TOKEN is set — escalation issues on the public tracker; escalations also emit a
+  # help.escalated event.v1 to agent-api /events (best-effort). Localhost-bound like the rest of
+  # the stack; PUBLIC exposure is a reverse-proxy concern (the deployment-doc stance).
+  help-mcp:
+    build:
+      # Wider context (the v0.12 carve root, the vcs-executor idiom): the image VENDORS the
+      # shipped docs corpus (docs/docs → /app/docs) — the "doc" tier every cited answer is from.
+      context: ../..
+      dockerfile: core/ops/services/help-mcp/Dockerfile
+    image: vexaai/v012-help-mcp:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${HELP_MCP_HOST_PORT:-18011}:8011"
+    environment:
+      - DOCS_ROOT=/app/docs
+      # OPTIONAL: lifts anonymous GitHub rate limits + switches escalate to filed mode.
+      # Absent ⇒ anonymous reads (rate-limit degrade with a note) + draft-mode escalation.
+      - HELP_GITHUB_TOKEN=${HELP_GITHUB_TOKEN:-}
+      # The event.v1 subject help.escalated events are attributed to (the ops workspace).
+      - VEXA_OPS_SUBJECT=${VEXA_OPS_SUBJECT:-ops}
+      - VEXA_AGENT_API_URL=http://agent-api:8100
+      - REDIS_URL=redis://redis:6379/0
+      - PORT=8011
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8011/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      # agent-api is deliberately NOT a dependency — escalate degrades gracefully without it.
+      redis:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
   meeting-api:
     build:
       # Wider context (the v0.12 carve root) than the other services: meeting_api validates at the
