@@ -64,7 +64,9 @@ def test_am_path_preserves_author_metadata_verbatim(token, github, bare_remote):
 
     head = "vexa/prop_7b20de55-fix-port"                      # constructed, never payload-named
     assert remote_log(bare_remote, head, "%an <%ae>") == "Jane Author <jane@example.com>"
-    assert remote_log(bare_remote, head, "%aI") == "2026-06-30T07:45:00+00:00"
+    # %aD (RFC 2822, matches the mbox Date: header) is stable across git
+    # versions; %aI flipped from "+00:00" to "Z" for UTC in git >= 2.45.
+    assert remote_log(bare_remote, head, "%aD") == "Tue, 30 Jun 2026 07:45:00 +0000"
     body = remote_log(bare_remote, head, "%B")
     assert "Signed-off-by: Jane Author <jane@example.com>" in body
     assert body.count(f"Origin: {ORIGIN_REF}") == 1           # the provenance trailer, once
