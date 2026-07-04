@@ -1,0 +1,22 @@
+# BuildKit per-Dockerfile ignore — REPLACES the root .dockerignore for THIS build only (the
+# other carve-root builds keep excluding docs/). Same lean-context list as the root, EXCEPT
+# docs/: this image vendors the shipped docs corpus (COPY docs/docs ./docs — the "doc" tier
+# every cited answer comes from), so the docs tree must enter the context (~650 KB).
+node_modules/
+**/node_modules/
+**/.venv/
+.venv/
+**/dist/
+**/__pycache__/
+**/.pytest_cache/
+.turbo/
+**/.turbo/
+*.egg-info/
+*.log
+.DS_Store
+.git/
+.env
+.env.*
+.recordings/
+clients/
+sdks/

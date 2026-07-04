@@ -28,6 +28,9 @@ flowchart LR
     postgres["postgres"]
     minio["minio"]
   end
+  subgraph ops["ops"]
+    help_mcp["help-mcp"]
+  end
   slim["slim"]
   dashboard["dashboard"]
   extension["extension"]
@@ -45,6 +48,9 @@ flowchart LR
   vcs_executor -->|""| redis
   vcs_executor -->|"HTTPS"| agent_api
   vcs_executor -->|"HTTPS"| github
+  help_mcp -->|""| redis
+  help_mcp -->|"HTTPS"| agent_api
+  help_mcp -->|"HTTPS"| github
   gateway -->|"HTTPS"| meeting_api
   gateway -->|"HTTPS"| agent_api
   gateway -->|"HTTPS"| admin_api

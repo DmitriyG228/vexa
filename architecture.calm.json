@@ -1205,7 +1205,7 @@
       "unique-id": "github",
       "node-type": "service",
       "name": "GitHub",
-      "description": "GitHub (external SaaS) — the VCS provider behind the human gate: webhooks arrive via vcs-ingress (inbound, a reverse-proxy concern); the ONLY outbound writer is vcs-executor, under per-proposal App installation tokens, executing exclusively human-approved proposal.v1 actions",
+      "description": "GitHub (external SaaS) — the VCS provider behind the human gate: webhooks arrive via vcs-ingress (inbound, a reverse-proxy concern); the PRIVILEGED outbound writer is vcs-executor, under per-proposal App installation tokens, executing exclusively human-approved proposal.v1 actions; help-mcp additionally reads public triage state and holds ONE narrow, config-gated write (HELP_GITHUB_TOKEN) — filing escalation issues on the public tracker",
       "interfaces": [
         {
           "unique-id": "github-api",
@@ -1302,6 +1302,58 @@
                 "writers": [
                   "admin-api"
                 ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "ops",
+      "node-type": "system",
+      "name": "ops",
+      "description": "platform support: help surfaces for the people deploying/operating vexa + the doc-gap telemetry loop — additive by design, no product domain depends on it",
+      "metadata": [
+        {
+          "path": "core/ops"
+        }
+      ]
+    },
+    {
+      "unique-id": "help-mcp",
+      "node-type": "service",
+      "name": "help-mcp",
+      "description": "public help companion (MCP): answers deploy/integration questions from two ALWAYS-LABELED tiers — doc (cited from the docs corpus vendored into the image) and operational (live GitHub triage, 15-min TTL cache); read-only v1 — it writes only its own help:questions telemetry and, config-gated (HELP_GITHUB_TOKEN), escalation issues; every escalation also emits a help.escalated event.v1 to agent-api (best-effort, degrades)",
+      "metadata": [
+        {
+          "path": "core/ops/services/help-mcp",
+          "domain": "ops"
+        }
+      ],
+      "interfaces": [
+        {
+          "unique-id": "help-mcp-rest",
+          "type": "api"
+        }
+      ]
+    },
+    {
+      "unique-id": "help-questions",
+      "node-type": "data-asset",
+      "name": "help:questions (stream)",
+      "description": "the help-question telemetry stream (MAXLEN ~5000, approximate): one entry {ts, tool, question, top_paths, answered_from_docs} per help-mcp tool call — recurring friction is the doc-gap signal the ops workspace reviews (review_question_log); v1-internal (single-writer, no published contract) — freezes as help-log.v1 the day a second writer appears",
+      "controls": {
+        "ownership": {
+          "description": "single writer (P23)",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+              "config": {
+                "writers": [
+                  "help-mcp"
+                ],
+                "match": "help:questions",
+                "op": "xadd"
               }
             }
           ]
@@ -2245,6 +2297,103 @@
       }
     },
     {
+      "unique-id": "ops-composed",
+      "relationship-type": {
+        "composed-of": {
+          "container": "ops",
+          "nodes": [
+            "help-mcp",
+            "help-questions"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "help-redis",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "help-mcp"
+          },
+          "destination": {
+            "node": "redis"
+          }
+        }
+      },
+      "description": "XADD help:questions (one telemetry entry per tool call, MAXLEN ~5000 approximate) + XREVRANGE read-back for the maintainer doc-gap routine; redis absence degrades gracefully (logged, the answer still returns)"
+    },
+    {
+      "unique-id": "help-questions-w",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "help-mcp"
+          },
+          "destination": {
+            "node": "help-questions"
+          }
+        }
+      },
+      "description": "the ONE writer of the question-log stream (best-effort telemetry — never fails an answer)",
+      "metadata": [
+        {
+          "access": "write"
+        }
+      ]
+    },
+    {
+      "unique-id": "help-aa",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "help-mcp"
+          },
+          "destination": {
+            "node": "agent-api",
+            "interface": "agent-api-rest"
+          }
+        }
+      },
+      "description": "POST /events — one help.escalated event.v1 envelope per escalation (subject = VEXA_OPS_SUBJECT; source = the filed issue URL or help://draft/<uuid>, an opaque ref — never the question bytes); unreachable agent-api degrades, the escalation answer still returns",
+      "protocol": "HTTPS"
+    },
+    {
+      "unique-id": "help-github",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "help-mcp"
+          },
+          "destination": {
+            "node": "github",
+            "interface": "github-api"
+          }
+        }
+      },
+      "description": "read-only public triage state (open issues labeled 'status: accepted' + 'type: bug', 15-min TTL cache; anonymous by default, optional HELP_GITHUB_TOKEN lifts rate limits) + the ONE config-gated write: filing a structured escalation issue on the public tracker — user-authored question/environment text only, sent at the user's explicit request",
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "access": "call"
+        }
+      ],
+      "controls": {
+        "data-egress": {
+          "description": "egress is the user's own escalation content to the PUBLIC tracker, config-gated behind HELP_GITHUB_TOKEN (no token ⇒ draft mode, zero egress); the service holds no vexa credential and no workspace data — nothing else can leave",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/no-egress.requirement.json",
+              "config": {
+                "dataClass": "help-escalation",
+                "destination": "external-saas",
+                "egressApproved": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
       "unique-id": "gw-ma",
       "relationship-type": {
         "connects": {
@@ -2490,6 +2639,7 @@
             "agent-api",
             "vcs-ingress",
             "vcs-executor",
+            "help-mcp",
             "admin-api",
             "runtime",
             "redis",

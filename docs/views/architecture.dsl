@@ -83,6 +83,10 @@ system platform  # shared infra backing the services
   database postgres
   service minio
 
+system ops  # platform support: help surfaces for the people deploying/operating vexa + the doc-gap telemetry loop — additive by design, no product domain depends on it
+  service help-mcp
+  data-asset help-questions [writers: help-mcp]
+
 edges:
   bot -write-> segments-stream
   bot -write-> tc-mutable
@@ -125,6 +129,10 @@ edges:
   vcs-executor -req-> redis  # XREADGROUP/XACK proposal:approved via the owned consumer group (at-least-once: an unreported entry stays pending for redelivery)
   vcs-executor -req-> agent-api  # POST /internal/proposals/{id}/executed — the result report-back (shared-secret bearer, constant-time): agent-api stays the ONE writer of proposal state; 409 = already settled, the idempotency check
   vcs-executor -call-> github  # human-approved proposal.v1 actions only — per-proposal App installation token scoped to the target repo + the proposal's level (L2 annotate; L3 + contents:write); L3 pushes vexa/<proposal-id>-* heads, never a protected branch, never --force
+  help-mcp -req-> redis  # XADD help:questions (one telemetry entry per tool call, MAXLEN ~5000 approximate) + XREVRANGE read-back for the maintainer doc-gap routine; redis absence degrades gracefully (logged, the answer still returns)
+  help-mcp -write-> help-questions  # the ONE writer of the question-log stream (best-effort telemetry — never fails an answer)
+  help-mcp -req-> agent-api  # POST /events — one help.escalated event.v1 envelope per escalation (subject = VEXA_OPS_SUBJECT; source = the filed issue URL or help://draft/<uuid>, an opaque ref — never the question bytes); unreachable agent-api degrades, the escalation answer still returns
+  help-mcp -call-> github  # read-only public triage state (open issues labeled 'status: accepted' + 'type: bug', 15-min TTL cache; anonymous by default, optional HELP_GITHUB_TOKEN lifts rate limits) + the ONE config-gated write: filing a structured escalation issue on the public tracker — user-authored question/environment text only, sent at the user's explicit request
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings
   gateway -req-> agent-api  # proxy /agent/*
   gateway -req-> admin-api  # POST /internal/validate (authz oracle)
@@ -139,7 +147,7 @@ edges:
   dashboard -req-> gateway  # dashboard client; live WS via gateway
   extension -req-> gateway  # browser extension client; live WS via gateway
   bot, agent-worker deployed-in runtime
-  gateway, meeting-api, agent-api, vcs-ingress, vcs-executor, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
+  gateway, meeting-api, agent-api, vcs-ingress, vcs-executor, help-mcp, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
 
 flows:
   live-transcript-flow: bot-writes-segments-stream -> collector-reads-segments -> collector-writes-tc -> aw-tcnative -> aw-proc -> terminal-reads-processed

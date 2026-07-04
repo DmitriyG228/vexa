@@ -19,6 +19,7 @@ flowchart LR
   vcs_subs[("vcs:subs (hash)")]
   va_chat[("va:meeting:{id}:chat (pubsub)")]
   identity_db[("identity (users/api_tokens)")]
+  help_questions[("help:questions (stream)")]
   bot -->|write| segments_stream
   bot -->|write| tc_mutable
   meeting_api -.->|read| segments_stream
@@ -49,6 +50,7 @@ flowchart LR
   vcs_ingress -.->|read| vcs_subs
   agent_api -->|write| vcs_subs
   vcs_executor -.->|read| proposal_audit
+  help_mcp -->|write| help_questions
   gateway -.->|read| bm_status
   gateway -.->|read| u_meetings
   gateway -.->|read| va_chat
