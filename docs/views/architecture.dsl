@@ -37,6 +37,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
 system agent  # copilot; owns the processed (cleaned) transcript + signals
   service agent-api
   service vcs-ingress
+  service vcs-executor
   contract event.v1
   contract ingress.v1
   contract invoke.v1
@@ -114,12 +115,16 @@ edges:
   agent-worker -read-> unit-in  # chat path XREADs interactive input
   agent-worker -req-> agent-api  # POST /internal/proposals — propose_vcs_action emits proposal.v1, dispatch-token verified (the human-gate seam; no GitHub credential in the worker)
   agent-api -write-> proposal-queue  # HSET/SADD proposals + pending sets (put/decide/mark_executed — the one writer)
-  agent-api -write-> proposal-audit  # XADD every status transition + the approved feed the future executor consumes
+  agent-api -write-> proposal-audit  # XADD every status transition + the approved feed the vcs-executor consumes
   vcs-ingress -req-> agent-api  # POST /events — one event.v1 envelope per matching subscription: OPAQUE github:// ref + the routine's plan, never payload bytes
   vcs-ingress -req-> redis  # SET NX delivery-id dedupe + XADD vcs:events (persist-first) + HGET vcs:subs (read-only view)
   vcs-ingress -write-> vcs-events  # XADD one ingress.v1 Delivery per verified webhook BEFORE any dispatch (replay recovers)
   vcs-ingress -read-> vcs-subs  # HGET repo -> subscriptions to fan a delivery out (never writes)
   agent-api -write-> vcs-subs  # HSET/HDEL — the workspace-routine reconciler compiles `on: vcs.*` routines into subscription records (the one writer)
+  vcs-executor -read-> proposal-audit  # XREADGROUP proposal:approved (the vcs-executor consumer group, created + owned here) + XACK once the result is reported — never an XADD; agent-api stays the one writer
+  vcs-executor -req-> redis  # XREADGROUP/XACK proposal:approved via the owned consumer group (at-least-once: an unreported entry stays pending for redelivery)
+  vcs-executor -req-> agent-api  # POST /internal/proposals/{id}/executed — the result report-back (shared-secret bearer, constant-time): agent-api stays the ONE writer of proposal state; 409 = already settled, the idempotency check
+  vcs-executor -call-> github  # human-approved proposal.v1 actions only — per-proposal App installation token scoped to the target repo + the proposal's level (L2 annotate; L3 + contents:write); L3 pushes vexa/<proposal-id>-* heads, never a protected branch, never --force
   gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings
   gateway -req-> agent-api  # proxy /agent/*
   gateway -req-> admin-api  # POST /internal/validate (authz oracle)
@@ -134,7 +139,7 @@ edges:
   dashboard -req-> gateway  # dashboard client; live WS via gateway
   extension -req-> gateway  # browser extension client; live WS via gateway
   bot, agent-worker deployed-in runtime
-  gateway, meeting-api, agent-api, vcs-ingress, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
+  gateway, meeting-api, agent-api, vcs-ingress, vcs-executor, admin-api, runtime, redis, postgres, minio, transcription deployed-in deploy
 
 flows:
   live-transcript-flow: bot-writes-segments-stream -> collector-reads-segments -> collector-writes-tc -> aw-tcnative -> aw-proc -> terminal-reads-processed

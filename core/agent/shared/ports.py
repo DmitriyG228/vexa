@@ -164,6 +164,11 @@ class VcsPort(Protocol):
         """Push ``ref`` from ``local_dir`` to ``remote_url`` using the brokered token; return the sha."""
         ...
 
+    def open_pr(self, remote_url: str, *, base: str, head: str, title: str, body: str) -> str:
+        """Open a pull request ``head`` → ``base`` on the repo at ``remote_url`` over the same
+        brokered token discipline (reveal-once, never logged); return the created PR's URL."""
+        ...
+
 
 @runtime_checkable
 class ProposalStorePort(Protocol):

@@ -94,3 +94,57 @@ def test_token_never_logged_or_persisted(tmp_path: Path, origin_repo: str, remot
     ).stdout.strip()
     assert TOKEN not in persisted
     assert persisted == remote_repo
+
+
+def test_open_pr_uses_brokered_token_and_returns_the_pr_url(monkeypatch, caplog):
+    """The worker-side ``VcsPort.open_pr`` counterpart of the vcs-executor's PR call: one POST to
+    /repos/{owner}/{repo}/pulls, the brokered token revealed ONLY into the Authorization header,
+    logged only redacted."""
+    import io
+    import json as _json
+    import logging
+    import urllib.request
+
+    from shared import adapters as adapters_mod
+
+    captured: dict = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["auth"] = req.get_header("Authorization")
+        captured["body"] = _json.loads(req.data)
+
+        class _Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        return _Resp(_json.dumps({"html_url": "https://github.com/user-7/memory/pull/12"}).encode())
+
+    monkeypatch.setattr(adapters_mod.urllib.request, "urlopen", fake_urlopen)
+    broker = FakeSecretsBroker({"workspace_git.token": TOKEN})
+    vcs = GitHubVcs(broker, subject="user-7")
+
+    with caplog.at_level(logging.DEBUG):
+        url = vcs.open_pr(
+            "https://github.com/user-7/memory.git",
+            base="main", head="vexa/prop_1-docs-fix", title="docs: fix", body="why",
+        )
+
+    assert url == "https://github.com/user-7/memory/pull/12"
+    assert captured["url"] == "https://api.github.com/repos/user-7/memory/pulls"
+    assert captured["auth"] == f"Bearer {TOKEN}"                 # revealed ONLY into the header
+    assert captured["body"] == {"title": "docs: fix", "body": "why",
+                                "head": "vexa/prop_1-docs-fix", "base": "main"}
+    # the broker audited the PR scope; the raw token never rode a log line (P15)
+    assert broker.audit == [("user-7", "workspace_git.token", "repo:pr")]
+    assert TOKEN not in caplog.text
+    assert "***REDACTED***" in caplog.text
+
+
+def test_open_pr_refuses_an_underivable_remote():
+    vcs = GitHubVcs(FakeSecretsBroker({"workspace_git.token": TOKEN}), subject="user-7")
+    with pytest.raises(ValueError, match="owner/name"):
+        vcs.open_pr("not-a-remote", base="main", head="vexa/prop_1-x", title="t", body="b")

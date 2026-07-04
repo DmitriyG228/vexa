@@ -222,6 +222,10 @@ services:
       - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
       # The shared key the control plane signs per-dispatch tokens with (dev tier; k8s → SPIRE).
       - VEXA_DISPATCH_SIGNING_KEY=${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}
+      # The vcs-executor's report-back bearer (POST /internal/proposals/{id}/executed) — a
+      # standing-service shared secret, constant-time-checked; MUST equal the executor's copy.
+      # Empty (default) fails closed: the route answers 503 and the executor consumes nothing.
+      - VEXA_EXECUTOR_RESULT_TOKEN=${VEXA_EXECUTOR_RESULT_TOKEN:-}
       # 'Add bot from URL' (terminal): agent-api forwards POST /api/meeting/bot → the gateway POST /bots.
       - VEXA_GATEWAY_URL=http://gateway:8000
       - VEXA_BOT_API_KEY=${VEXA_BOT_API_KEY:-}
@@ -263,6 +267,54 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8020/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      redis:
+        condition: service_healthy
+      agent-api:
+        condition: service_healthy
+    networks: [vexa]
+    restart: unless-stopped
+
+  # vcs-executor — the CREDENTIALED EXECUTOR: the privileged half of the proposal.v1 human gate
+  # and the ONLY holder of GitHub credentials. XREADGROUPs human-approved proposals off
+  # proposal:approved, re-validates (schema + policy, BEFORE any credential), mints a per-proposal
+  # GitHub App installation token scoped to the target repo + the proposal's level, executes
+  # exactly the approved action, and reports to agent-api /internal/proposals/{id}/executed —
+  # agent-api stays the single writer of proposal state. Localhost-bound /health only; this
+  # service serves nothing else (it makes outbound calls: redis, agent-api, GitHub).
+  vcs-executor:
+    build:
+      # Wider context (the v0.12 carve root, the meeting-api idiom): the shipped consumer loads
+      # the sealed proposal.v1 schema BY PATH, so the frozen contract file is vendored in.
+      context: ../..
+      dockerfile: core/agent/services/vcs-executor/Dockerfile
+    image: vexaai/v012-vcs-executor:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${VCS_EXECUTOR_HOST_PORT:-18021}:8021"
+    environment:
+      # GitHub App identity — the App id + the PRIVATE KEY FILE path *inside the container*
+      # (mount the .pem via `volumes:` below; the key is a file secret, never env-inlined).
+      # Either absent ⇒ fail-closed: /health serves, the consumer stays down, nothing is consumed.
+      - VEXA_GITHUB_APP_ID=${VEXA_GITHUB_APP_ID:-}
+      - VEXA_GITHUB_APP_PRIVATE_KEY_PATH=${VEXA_GITHUB_APP_PRIVATE_KEY_PATH:-/run/secrets/vexa-github-app-key.pem}
+      # The report-back bearer — MUST equal agent-api's VEXA_EXECUTOR_RESULT_TOKEN (see above).
+      - VEXA_EXECUTOR_RESULT_TOKEN=${VEXA_EXECUTOR_RESULT_TOKEN:-}
+      # Branches the executor refuses to target as a push head (belt over the vexa/<id>-* prefix).
+      - VEXA_PROTECTED_BRANCHES=${VEXA_PROTECTED_BRANCHES:-main,master,0.12}
+      - VEXA_AGENT_API_URL=http://agent-api:8100
+      - REDIS_URL=redis://redis:6379/0
+      - PORT=8021
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    # volumes:
+    #   # The GitHub App private key, mounted read-only at the path named above, e.g.:
+    #   - ${VEXA_GITHUB_APP_PRIVATE_KEY_HOST_PATH}:/run/secrets/vexa-github-app-key.pem:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8021/health').status==200 else 1)"]
       interval: 10s
       timeout: 5s
       retries: 5

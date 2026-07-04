@@ -1141,7 +1141,7 @@
       "unique-id": "proposal-audit",
       "node-type": "data-asset",
       "name": "proposal:audit + proposal:approved (streams)",
-      "description": "append-only audit of every proposal transition, plus the approval feed the (future) credentialed executor XREADGROUPs; agent-api XADDs both",
+      "description": "append-only audit of every proposal transition, plus the approval feed the credentialed vcs-executor XREADGROUPs (via its own consumer group); agent-api XADDs both",
       "controls": {
         "ownership": {
           "description": "single writer (P23)",
@@ -1179,6 +1179,36 @@
       "interfaces": [
         {
           "unique-id": "vcs-ingress-rest",
+          "type": "api"
+        }
+      ]
+    },
+    {
+      "unique-id": "vcs-executor",
+      "node-type": "service",
+      "name": "vcs-executor",
+      "description": "credentialed executor: the privileged half of the proposal.v1 human gate and the ONLY GitHub credential holder — consumes human-approved proposals (schema + policy re-checked BEFORE any credential), mints per-proposal repo+level-scoped installation tokens, executes exactly the approved action, reports back to agent-api (the one writer of proposal state)",
+      "metadata": [
+        {
+          "path": "core/agent/services/vcs-executor",
+          "domain": "agent"
+        }
+      ],
+      "interfaces": [
+        {
+          "unique-id": "vcs-executor-rest",
+          "type": "api"
+        }
+      ]
+    },
+    {
+      "unique-id": "github",
+      "node-type": "service",
+      "name": "GitHub",
+      "description": "GitHub (external SaaS) — the VCS provider behind the human gate: webhooks arrive via vcs-ingress (inbound, a reverse-proxy concern); the ONLY outbound writer is vcs-executor, under per-proposal App installation tokens, executing exclusively human-approved proposal.v1 actions",
+      "interfaces": [
+        {
+          "unique-id": "github-api",
           "type": "api"
         }
       ]
@@ -1288,6 +1318,7 @@
           "nodes": [
             "agent-api",
             "vcs-ingress",
+            "vcs-executor",
             "event.v1",
             "ingress.v1",
             "invoke.v1",
@@ -2034,7 +2065,7 @@
           }
         }
       },
-      "description": "XADD every status transition + the approved feed the future executor consumes",
+      "description": "XADD every status transition + the approved feed the vcs-executor consumes",
       "metadata": [
         {
           "access": "write"
@@ -2127,6 +2158,91 @@
           "access": "write"
         }
       ]
+    },
+    {
+      "unique-id": "vcsx-approved",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vcs-executor"
+          },
+          "destination": {
+            "node": "proposal-audit"
+          }
+        }
+      },
+      "description": "XREADGROUP proposal:approved (the vcs-executor consumer group, created + owned here) + XACK once the result is reported — never an XADD; agent-api stays the one writer",
+      "metadata": [
+        {
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "unique-id": "vcsx-redis",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vcs-executor"
+          },
+          "destination": {
+            "node": "redis"
+          }
+        }
+      },
+      "description": "XREADGROUP/XACK proposal:approved via the owned consumer group (at-least-once: an unreported entry stays pending for redelivery)"
+    },
+    {
+      "unique-id": "vcsx-aa",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vcs-executor"
+          },
+          "destination": {
+            "node": "agent-api",
+            "interface": "agent-api-rest"
+          }
+        }
+      },
+      "description": "POST /internal/proposals/{id}/executed — the result report-back (shared-secret bearer, constant-time): agent-api stays the ONE writer of proposal state; 409 = already settled, the idempotency check",
+      "protocol": "HTTPS"
+    },
+    {
+      "unique-id": "vcsx-github",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "vcs-executor"
+          },
+          "destination": {
+            "node": "github",
+            "interface": "github-api"
+          }
+        }
+      },
+      "description": "human-approved proposal.v1 actions only — per-proposal App installation token scoped to the target repo + the proposal's level (L2 annotate; L3 + contents:write); L3 pushes vexa/<proposal-id>-* heads, never a protected branch, never --force",
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "access": "call"
+        }
+      ],
+      "controls": {
+        "data-egress": {
+          "description": "the ONLY GitHub credential holder and the only outbound VCS writer; every byte it sends is a human-approved proposal payload (the P15 gate sits between the agent and this edge)",
+          "requirements": [
+            {
+              "requirement-url": "https://vexa.ai/calm/controls/no-egress.requirement.json",
+              "config": {
+                "dataClass": "vcs-payload",
+                "destination": "external-saas",
+                "egressApproved": true
+              }
+            }
+          ]
+        }
+      }
     },
     {
       "unique-id": "gw-ma",
@@ -2373,6 +2489,7 @@
             "meeting-api",
             "agent-api",
             "vcs-ingress",
+            "vcs-executor",
             "admin-api",
             "runtime",
             "redis",

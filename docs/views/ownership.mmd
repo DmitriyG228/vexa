@@ -48,6 +48,7 @@ flowchart LR
   vcs_ingress -->|write| vcs_events
   vcs_ingress -.->|read| vcs_subs
   agent_api -->|write| vcs_subs
+  vcs_executor -.->|read| proposal_audit
   gateway -.->|read| bm_status
   gateway -.->|read| u_meetings
   gateway -.->|read| va_chat

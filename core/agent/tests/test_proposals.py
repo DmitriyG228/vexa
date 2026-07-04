@@ -337,6 +337,94 @@ def test_unwired_store_answers_501_honestly():
     assert client.post("/internal/proposals", json=_proposal()).status_code == 501
 
 
+# ── the executor report-back sink (/internal/proposals/{id}/executed) ─────────────────────────────
+# agent-api stays the ONE writer of proposal state (P23): the vcs-executor reports here, never
+# touches redis. Auth is a dedicated STANDING-SERVICE shared secret (VEXA_EXECUTOR_RESULT_TOKEN,
+# constant-time) — the per-dispatch verifier doesn't apply (nothing mints for a standing service).
+
+_EXEC_TOKEN = "test-executor-result-token"
+
+
+def _executor_client(store=None, *, token: str = _EXEC_TOKEN):
+    store = store if store is not None else FakeProposalStore()
+    app = create_app(
+        Dispatcher(load_settings(executor_result_token=token), FakeRuntime(), _FakeIdentity()),
+        proposals=store, token_verifier=LocalIdentityMinter(_KEY),
+    )
+    return TestClient(app), store
+
+
+def _approved(store, action: str = "comment") -> str:
+    pid = store.put(_proposal(action, declared="L3"))
+    store.decide([pid], True, by="u_jane")
+    return pid
+
+
+def test_executed_sink_auth_matrix():
+    client, store = _executor_client()
+    pid = _approved(store)
+    url = f"/internal/proposals/{pid}/executed"
+    # no bearer → 401; wrong bearer → 401 (constant-time compare, no oracle)
+    assert client.post(url, json={"result_url": "u"}).status_code == 401
+    r = client.post(url, json={"result_url": "u"}, headers={"Authorization": "Bearer wrong"})
+    assert r.status_code == 401
+    # the DISPATCH token (the worker-side credential) buys nothing on this standing-service edge
+    r = client.post(url, json={"result_url": "u"}, headers={"Authorization": f"Bearer {_mint()}"})
+    assert r.status_code == 401
+    assert store.get(pid)["status"] == "approved"            # nothing moved
+    # the executor's own secret → 200
+    r = client.post(url, json={"result_url": "u"}, headers={"Authorization": f"Bearer {_EXEC_TOKEN}"})
+    assert r.status_code == 200 and r.json()["status"] == "executed"
+
+
+def test_executed_sink_fails_closed_when_unconfigured():
+    client, store = _executor_client(token="")
+    pid = _approved(store)
+    r = client.post(f"/internal/proposals/{pid}/executed", json={"result_url": "u"},
+                    headers={"Authorization": "Bearer anything"})
+    assert r.status_code == 503                              # unconfigured ⇒ refuse, never accept
+
+
+def test_executed_sink_status_transitions_and_audit():
+    r_ = fakeredis.FakeRedis(decode_responses=True)
+    client, store = _executor_client(RedisProposalStore(r_))
+    headers = {"Authorization": f"Bearer {_EXEC_TOKEN}"}
+    ok = _approved(store)
+    resp = client.post(f"/internal/proposals/{ok}/executed",
+                       json={"result_url": "https://github.com/vexa-ai/vexa/pull/9", "sha": "a" * 40},
+                       headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["execution"]["sha"] == "a" * 40 and resp.json()["execution"]["at"]
+    # an error result maps to failed
+    bad = _approved(store, "label")
+    resp = client.post(f"/internal/proposals/{bad}/executed", json={"error": "422 from github"},
+                       headers=headers)
+    assert resp.status_code == 200 and resp.json()["status"] == "failed"
+    # the audit stream carries BOTH terminal transitions, stamped by the executor path
+    transitions = [(f["from"], f["to"], f["by"]) for _id, f in r_.xrange(AUDIT_STREAM)]
+    assert (("approved", "executed", "executor") in transitions
+            and ("approved", "failed", "executor") in transitions)
+    # idempotency contract: a second report for a settled proposal → 409 (the executor acks on it)
+    resp = client.post(f"/internal/proposals/{ok}/executed", json={"result_url": "u"}, headers=headers)
+    assert resp.status_code == 409
+    # a still-pending proposal cannot be marked executed → 409; an unknown id → 404
+    pending = store.put(_proposal("close"))
+    assert client.post(f"/internal/proposals/{pending}/executed", json={"result_url": "u"},
+                       headers=headers).status_code == 409
+    assert client.post("/internal/proposals/prop_deadbeef/executed", json={"result_url": "u"},
+                       headers=headers).status_code == 404
+
+
+def test_executed_sink_refuses_extra_fields():
+    client, store = _executor_client()
+    pid = _approved(store)
+    r = client.post(f"/internal/proposals/{pid}/executed",
+                    json={"result_url": "u", "status": "executed"},   # status is server-owned
+                    headers={"Authorization": f"Bearer {_EXEC_TOKEN}"})
+    assert r.status_code == 422
+    assert store.get(pid)["status"] == "approved"
+
+
 # ── the worker emission tool (the stdio MCP server, offline) ──────────────────────────────────────
 
 def test_tool_derives_level_and_dispatch_identity_from_env():

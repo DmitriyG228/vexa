@@ -1,0 +1,5 @@
+# src — vcs-executor service source root
+
+Holds the `vcs_executor` Python package (the `pythonpath` for tests, per `pyproject.toml`).
+The package is the front door; import `create_app` from `vcs_executor`, never a deep module
+path (P6).
