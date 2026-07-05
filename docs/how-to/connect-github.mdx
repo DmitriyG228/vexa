@@ -54,3 +54,32 @@ to GitHub is a **governed action**: the push adapter uses per-user brokered cred
 (the token lives on the remote only for the duration of the push, then is scrubbed), and
 push flows are part of the [proposal-gated VCS direction](/roadmap/next) — write access
 to your repos always crosses an explicit gate, never happens as a side effect.
+## Publish a vexa-born workspace to GitHub
+
+A workspace that started life inside vexa (seeded from the template, not attached from
+one of your repos) carries real git history from day one. *Publish* gives it a home on
+GitHub: vexa creates the repository under your account and pushes the workspace's full
+history to it.
+
+In the terminal, open **workspaces** in the sidebar and choose **Publish to GitHub…**
+(shown when your active workspace is vexa-born). Fill in:
+
+- **Repo name** — defaults to your workspace's name.
+- **Private** — on by default; untick to create a public repository.
+- **GitHub token** — a personal access token with `repo` scope. It is used once,
+  server-side, to create the repository and push — it is never stored.
+
+On success the repository URL is shown. Publishing again later pushes your new commits
+to the same repository (a plain fast-forward push — vexa never force-pushes; if the
+remote has diverged you get a clear error instead).
+
+Notes:
+
+- To publish into a repository you already created (it must be empty), or under an
+  organization, call the API directly: `POST /api/workspace/publish` with
+  `{"remote_url": "https://github.com/you/repo.git", "token": "…"}` or
+  `{"repo_name": "…", "org": "your-org", "token": "…"}`.
+- If the name is taken you get a clear error — pick another name, or pass the existing
+  repository's URL as `remote_url` to push into it.
+- A workspace **attached** from one of your own repos can't be published — it already
+  has an origin; push there instead.
