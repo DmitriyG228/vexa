@@ -69,7 +69,8 @@
           "architecture/identity-and-trust",
           "architecture/governance",
           "architecture/architecture-as-code",
-          "architecture/transcript-persistence"
+          "architecture/transcript-persistence",
+          "architecture/gates"
         ]
       },
       {

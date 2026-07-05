@@ -24,4 +24,4 @@ The move into `core/` is purely structural: the sealed contracts are byte-identi
 registry keys re-prefixed to `core/…`), and the full gate suite stays green.
 
 _The per-domain bounded-context rules (P1–P3) and the dependency seam are summarized above; see the
-[architecture docs](../docs/docs/architecture/README.md) for modules, dispatch, execution, and governance._
+[architecture docs](../docs/architecture/README.md) for modules, dispatch, execution, and governance._

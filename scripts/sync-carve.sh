@@ -36,8 +36,27 @@ INCLUDE=(
   clients/README.md
   # FINOS CALM architecture-as-code model (validated by gate:calm)
   calm
-  # public docs (Mintlify-hosted) + generated CALM views (checked by gate:dataflow)
-  docs/docs
+  # public docs (Mintlify-hosted, FLAT under docs/ — enumerated so mono-only
+  # engineering ledgers never sync) + generated CALM views (gate:dataflow)
+  docs/docs.json
+  docs/index.mdx
+  docs/quickstart.mdx
+  docs/authentication.mdx
+  docs/case-studies.mdx
+  docs/changelog.mdx
+  docs/concepts.mdx
+  docs/configuration.mdx
+  docs/decisions.mdx
+  docs/deployment.mdx
+  docs/sdks.mdx
+  docs/troubleshooting.mdx
+  docs/api
+  docs/architecture
+  docs/clients
+  docs/core
+  docs/deployment
+  docs/how-to
+  docs/roadmap
   docs/views
   docs/README.md
   # root scaffolding required to build/run the workspace
