@@ -1,17 +1,31 @@
 ---
 title: "Operating principles"
-description: "The design principles behind Vexa's deployment, configuration, and transcription reliability — declared capabilities, evidence-based lifecycle, durable two-store persistence."
+description: "The principles Vexa is built and run by — declared capabilities, evidence-based lifecycle, durable persistence, fail-loud faults, and the standing rules for how the project ships."
 ---
 
-Vexa is built so that a fault is **loud and attributable before it costs you a meeting**. These
-are the principles the stack operates by, and the concrete machinery behind each one.
+Vexa is built so that a fault is **loud and attributable before it costs you a meeting**, and
+run so that every change is accountable to a human. This page is the readable public projection
+of those principles — the governing statements and why each one holds.
 
-## Capabilities declare themselves
+<Note>
+  This page **derives from** [`docs/ARCHITECTURE.md`](https://github.com/Vexa-ai/vexa-core/blob/main/docs/ARCHITECTURE.md)
+  — **the constitution**. ARCHITECTURE.md governs: it holds the full principle set (P1–P21, P23),
+  each tied to the established practice it comes from *and* the CI gate that enforces it. When this
+  public projection and the constitution disagree, the constitution wins. This page is the readable
+  summary; ARCHITECTURE.md is the source of truth.
+</Note>
+
+## Engineering principles
+
+How the running system behaves — the machinery that makes faults loud and state trustworthy.
+
+### Capabilities declare themselves
 
 Every configuration key a service reads is **declared** in a sealed per-service `config.v1`
 declaration (required-explicit / defaulted / capability classes). The declaration is
 contract-checked against every deploy surface (compose, lite, helm) in CI in both directions —
-an undeclared knob or an unwired one fails the gate, not the deployment.
+an undeclared knob or an unwired one fails the gate, not the deployment. Boot preflight fails
+loudly, naming every missing key.
 
 At runtime, capabilities are **tri-state rows on `/health`** (`ok` / `misconfigured` /
 `not_configured`), backed by **live probes** with your real endpoints and credentials: the `stt`
@@ -19,9 +33,11 @@ capability probes the transcription service with the configured token; `model_in
 the credential file the workers will actually read. A misconfigured capability — including a
 credential that is *set but rejected* — is visible on `/health` before any meeting runs.
 
-See [Configuration → the config contract](/configuration#the-config-contract-configv1).
+*Why:* an undeclared config knob is a silent failure waiting for a deploy target to find it.
+Declaration ↔ deploy-surface ↔ code-read agreement is enforced by `gate:config-contract`
+(ADR-0026, PR #49). See [Configuration → the config contract](/configuration#the-config-contract-configv1).
 
-## Lifecycle requires evidence
+### Lifecycle requires evidence
 
 Meeting state advances only on **proof**: a tracked workload's terminal state with its real exit
 code, or the bot's own `lifecycle.v1` callback. A runtime `404` for a workload it doesn't track
@@ -35,7 +51,10 @@ Stops **verify termination**: a stop isn't done until termination is confirmed �
 stops stay `stopping` and are retried — and the bot handles SIGTERM with a graceful leave inside
 a bounded grace window (`RUNTIME_STOP_GRACE_SEC` / `BOT_SIGTERM_GRACE_MS`).
 
-## Two-store persistence
+*Why:* silent faults are the most expensive class of fault. Every mechanism here exists to make
+a fault loud and attributable (PRs #49/#50/#53).
+
+### Two-store persistence
 
 Transcripts live in two stores with distinct jobs: **redis is the live tail** (low-latency
 segments while the meeting runs), **postgres is the durable record**. A background db-writer
@@ -45,18 +64,86 @@ finalizes everything at meeting completion. The read path **merges both stores**
 expiry. A regression test enforces the guarantee directly: flush, wipe redis, assert the
 transcript still serves.
 
-See [Transcript persistence](/architecture/transcript-persistence).
+*Why:* the durable record must survive a redis expiry, and the answer must not change when it
+does. See [Transcript persistence](/architecture/transcript-persistence).
 
-## Fail loud, with actionable messages
+### Fail loud, with actionable messages
 
 A spawn that can't do what was asked is rejected with a typed error naming the exact variables
 to set; a misconfigured credential shows on `/health` with the probe's reason, not as empty
-output later. No capability fails silently. See the
-[decisions register](/decisions#fail-loud-with-evidence-2026-07-04).
+output later. No capability fails silently, and no state transition happens without evidence.
 
-## Fix the class, not the instance
+*Why:* a fault the operator can act on immediately is cheaper than one discovered hours later as
+empty output.
+
+### Fix the class, not the instance
 
 Deploy targets share configuration classes: a config fix discovered on one target (compose,
-lite, or helm) is swept across all of them, and **capability parity** across the three
-validation stacks is a release check. See the
-[decisions register](/decisions#fix-the-class-not-the-instance-2026-07-05).
+lite, or helm) is **swept across all of them**, and **capability parity** across the three
+validation stacks is a release check. Same-class recurrence across targets is treated as a
+process violation, not bad luck.
+
+*Why:* a fix applied to only one target leaves the same class open on the others.
+
+## How the project ships
+
+The standing, maintainer-ruled rules for how work reaches users. Each was explicitly ruled by
+the maintainer; where a rule has an enforcing artifact — an ADR, a gate, a contract — it is
+named.
+
+### Repository boundaries
+
+`Vexa-ai/vexa-core` is the FINOS open-core project. Development happens on the working repo's
+release branches; content flows into vexa-core through the **carve train** — a manifest-driven,
+authorship-preserving replay (merge commits only, never squash). No ad-hoc PRs to vexa-core;
+exceptions are owner-driven and deliberate.
+
+*Why:* one governed public core, one place where work actually happens, deterministic
+convergence between them. — ADR-0025.
+
+### Humans-only authorship
+
+Anything pushed to GitHub carries a **human git author** — the operating maintainer — never a
+machine identity. AI contribution is acknowledged as a trailer, never as author; machine
+identities are mailmapped to the operating maintainer. (Runtime-internal workspace git, where
+the platform is the committer, is exempt.)
+
+*Why:* accountability and provenance — a human answers for every change.
+
+### Community steering
+
+Community bugfixes and clean opt-in features **merge, with credit**. Salvageable work in a stale
+PR is cherry-picked with the original author preserved. Only design-value-dead code is closed —
+and always with a personal note explaining why, or crediting what the idea contributed.
+
+*Why:* contributors are the project's future maintainers; nobody's work is silently discarded.
+
+### Docs along the way
+
+Every PR carries its own documentation (env comments, ADRs, chart docs), and **`docs/` is the
+corpus** — one flat, published documentation tree; no shadow doc piles. Every doc claim is
+verified against the tree or a live probe, never inferred from planning documents.
+
+*Why:* docs that trail the code are wrong docs; the corpus is only trustworthy if writing it is
+part of shipping.
+
+### Releases ship against an explicit DoD
+
+A release has a written definition of done: all images published and referenced, all PRs/issues
+resolved, every deploy target proven **from the published images on fresh infrastructure**, the
+maintainer **personally eyeballs** the client on each target and live meetings on the real
+platforms, backward compatibility validated behaviorally, core parity re-checked, docs updated.
+
+*Why:* "CI is green" is not "it works" — a human pass over the live product catches classes of
+defect no automated leg is written for.
+
+### No migrations on a release line
+
+Fixes landing inside a release line must not require schema migrations — extension happens
+inside existing structures. Corollary: **`meetings.data` JSONB is the extension point** —
+recordings, notes, and processed views (`data.processed.views[]`) live there as addressable,
+versioned artifacts, which also keeps them multi-consumer for the
+[multi-workspace direction](/roadmap/multi-workspace).
+
+*Why:* operators on a release line get fixes, not upgrade ceremonies. — PR #53,
+[Transcript persistence](/architecture/transcript-persistence).

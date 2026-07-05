@@ -5,7 +5,8 @@ description: "The committed near-term (0.12.1) and the 0.12.x direction — comm
 
 Two tiers, kept honest: **committed** means the maintainer has ruled it and it has a target;
 **direction** means we know where we're heading but not when each piece lands. How we work while
-getting there is the [decisions register](/decisions); current proven state is
+getting there is [Operating principles → How the project ships](/principles#how-the-project-ships);
+current proven state is
 [Status](/roadmap/status).
 
 ## 0.12.1 — the fast-follow (committed, days not months)
@@ -24,7 +25,7 @@ getting there is the [decisions register](/decisions); current proven state is
   `model_inference` capability row.
 - **Capability-parity release check** — a release-pipeline leg that diffs the `/health`
   capability rows across the compose/lite/helm validation stacks; any asymmetry fails the
-  release ([fix the class, not the instance](/decisions#fix-the-class-not-the-instance)).
+  release ([fix the class, not the instance](/principles#fix-the-class-not-the-instance)).
 
 - **Governed GitHub pull + auto-sync** — a *Pull from GitHub* workspace action: fast-forward
   applies directly; a divergent remote is merged by the workspace agent as an attributed turn
@@ -54,7 +55,7 @@ getting there is the [decisions register](/decisions); current proven state is
 - **MCP behind the gateway** — one MCP server for all of Vexa's capabilities, mounted at the
   gateway; the standalone port is interim ([MCP server](/api/mcp)).
 - **Community-issue triage** — the full community backlog is triaged post-release, verdict by
-  verdict, per the [community-steering policy](/decisions#community-steering).
+  verdict, per the [community-steering policy](/principles#community-steering).
 
 - **Workspace graph view** — an Obsidian-style graph over the workspace's knowledge graph:
   entities and documents as nodes, `[[wikilinks]]` and frontmatter relations as edges, rendered

@@ -14,7 +14,6 @@ site.
 - `architecture/` — how dispatch / execution / streaming / persistence / trust / the gates work
 - `api/` — the API references (meetings · agent · MCP · errors)
 - `deployment.mdx` + `deployment/` — compose · lite · helm; `configuration.mdx` · `troubleshooting.mdx` · `principles.mdx`
-- `decisions.mdx` — how we do things (the standing maintainer-ruled policies)
 - `roadmap/` — where we go (approach · stages · status · next · multi-workspace · swarm)
 
 **The engineering references** (governing build docs; linked from code, gates, and AGENTS.md —

@@ -103,7 +103,6 @@
           "roadmap/stages",
           "roadmap/status",
           "roadmap/next",
-          "decisions",
           "roadmap/multi-workspace",
           "roadmap/swarm"
         ]
