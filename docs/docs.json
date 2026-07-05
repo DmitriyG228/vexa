@@ -33,6 +33,7 @@
         "pages": [
           "how-to/chat-workspace",
           "how-to/workspace-files",
+          "how-to/connect-github",
           "how-to/daily-brief",
           "how-to/email-triage"
         ]
