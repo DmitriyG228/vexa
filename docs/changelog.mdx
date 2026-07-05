@@ -162,6 +162,26 @@ The design principles behind #49/#50/#53 are described in
 - **`discord` ingest and `GET …/participants`**: **planned back in the 0.12.x line** with the
   next `api.v1` contract revision.
 
+## Breaking changes for 0.10 clients
+
+0.12 validates 0.10 API compatibility behaviorally in CI (the `V010_COMPAT` suite runs on
+every release build). Six responses changed shape; each is pinned by a strict test so no
+further undocumented change can ship. Migration is a small client-side edit in every case —
+the underlying behavior is unchanged.
+
+| Call | 0.10 shape | 0.12 shape | Migration |
+|---|---|---|---|
+| `GET /bots/status` | `{"running_bots": [...]}` | `{"running": [...], "count": N}` | read `running` instead of `running_bots` |
+| `DELETE /bots/{platform}/{id}` | `202` + `{"message"}` | `200` + `{"status": "stopping", ...}` | accept `200`; read `status` |
+| Admin API via gateway | `/admin/*` proxied through the gateway | gateway returns 404; call the admin-api service directly | point admin tooling at the admin-api base URL |
+| `PUT /user/webhook` | echoed the full user object | echoes `{id, email, name, max_concurrent_bots}`; the config is applied | `GET` after `PUT` if you need the applied config echoed |
+| `/ws` connect | only subscribed frames, enveloped | also pushes flat `meeting.status` frames for your meetings on connect | ignore unknown frame shapes |
+| `POST /admin/users`, `POST /admin/users/{id}/tokens` | included `created_at` (required in 0.10 client models) | `created_at` omitted | make the field optional in your models |
+
+Also note: webhook signatures are now computed over `"<timestamp>." + payload`
+(header `X-Webhook-Timestamp`; replay protection) — 0.10 receivers verifying
+`hmac(payload)` must update their recipe ([webhooks guide](/how-to/webhooks)).
+
 ## Versioning
 
 Vexum follows semantic-ish versioning at the `MAJOR.MINOR` line; breaking changes are called out in the
