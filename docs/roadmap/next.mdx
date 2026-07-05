@@ -52,6 +52,22 @@ getting there is the [decisions register](/decisions); current proven state is
 - **Community-issue triage** — the full community backlog is triaged post-release, verdict by
   verdict, per the [community-steering policy](/decisions#community-steering).
 
+- **Workspace graph view** — an Obsidian-style graph over the workspace's knowledge graph:
+  entities and documents as nodes, `[[wikilinks]]` and frontmatter relations as edges, rendered
+  live in the terminal's workspace surface. The data model already exists — the `kg/` subtree is
+  an OKF bundle of wiki-linked markdown entities — so this is a read-side visualization of what
+  every agent turn is already building. Click-through to the entity, filter by type, local graph
+  around the open document.
+- **Workspace views: rich apps inside the workspace** — a `view` becomes a first-class workspace
+  notion: a rich, interactive React app that lives *in* the workspace (as content, versioned with
+  it) and renders inside the terminal — dashboards over the knowledge graph, deal pipelines,
+  meeting review boards, anything the workspace's data can drive. Views are distributed and
+  shared the way workspace content is (git), and render inside a governed sandbox with a closed
+  component/capability registry — a view can read the workspace and invoke governed actions, never
+  arbitrary code with ambient authority. This is the presentation layer the
+  [multi-workspace direction](/roadmap/multi-workspace) implies: a shared meeting workspace whose
+  members see the same live views over the same data.
+
 ## Direction: multi-workspace collaboration
 
 The accepted architecture — required per-user system workspaces, sharing as membership via
