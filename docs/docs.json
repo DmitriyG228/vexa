@@ -63,6 +63,7 @@
       {
         "group": "Architecture",
         "pages": [
+          "ARCHITECTURE",
           "architecture/modules",
           "architecture/execution",
           "architecture/dispatch",

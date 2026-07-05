@@ -19,7 +19,8 @@ site.
 **The engineering references** (governing build docs; linked from code, gates, and AGENTS.md —
 not Mintlify pages):
 
-- `ARCHITECTURE.md` — the constitution (P1–P21+), each principle tied to a CI gate
+- `ARCHITECTURE.md` — the constitution (P1–P21, P23), each principle tied to a CI gate; also
+  rendered in the corpus as [Architecture — the Constitution](/ARCHITECTURE)
 - `CONTROL-PLANE.md` — the applied meetings⊥agent separation + critical-path catalog
 - `adr/` — architecture decision records; `views/` — generated CALM projections (gate:dataflow)
 - `PARITY-MAIN.md` (gate:parity) · `ARCH-COMPLIANCE.md` (generated) · `LEARNINGS.md` (the

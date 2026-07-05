@@ -1,3 +1,9 @@
+---
+title: "Architecture — the Constitution"
+description: "The governing reference for Vexa: the modularity principles (P1-P23), each tied to the established practice it comes from and the CI gate that enforces it. The source of truth the public principles page projects."
+keywords: ["constitution", "governance", "principles", "architecture", "gates", "modularity"]
+---
+
 # Vexa Architecture — Governing Reference
 
 > The constitution. Before you add a file, move a module, or define a contract, it is
