@@ -6,6 +6,17 @@ description: "Self-host Vexum with Docker Compose — air-gapped, with bring-you
 Vexum runs **in your own environment** — open-source, self-hostable, air-gappable. Data, recordings, and
 agent state stay on infrastructure you control.
 
+## Three supported deploy paths
+
+| Path | For | Docs |
+|---|---|---|
+| **Docker Compose** (`make all`) | the default — one Linux host, each service its own container | this page |
+| **Vexa Lite** (`make lite`) | the simplest — the whole control plane in **one container**, bots/agents as child processes | [Vexa Lite](/deployment/lite) |
+| **Helm** (`deploy/helm/charts/vexa`) | Kubernetes — bots and agent workers spawn **as Pods** | [Kubernetes](/deployment/helm) |
+
+All three run the same images and contracts; the release pipeline proves each from the published
+images before a version ships.
+
 ## Quick start (Docker Compose)
 
 Prerequisites: a Linux host (Ubuntu 24.04), Docker, `git`, `curl`.

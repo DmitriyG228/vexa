@@ -1,0 +1,77 @@
+---
+title: "Kubernetes (Helm)"
+description: "Deploy the full stack on Kubernetes — the runtime spawns bots and agent workers as Pods."
+---
+
+The Helm chart at `deploy/helm/charts/vexa` deploys the 0.12 control plane on Kubernetes: the
+five long-running services (gateway · admin-api · meeting-api · runtime · agent-api) plus the
+terminal and optional in-cluster infra (postgres · redis · minio + a bucket-init Job). With
+`runtime.backend=k8s` the runtime launches meeting bots and agent workers **as Pods on demand**
+under its own ServiceAccount/RBAC — they are not chart Deployments.
+
+```bash
+helm install vexa deploy/helm/charts/vexa \
+  --set global.imageTag=v0.12.0 \
+  --set secrets.adminApiToken=<strong-secret> \
+  --set secrets.transcriptionServiceToken=<stt-token>
+```
+
+## The values that matter
+
+| Value | Purpose |
+|---|---|
+| `global.imageTag` | Overrides every service image tag — pin your release (build-once promotion). |
+| `runtime.backend` | Spawn substrate: `k8s` (Pods — the real cloud path, default) or `docker` (host socket, single-node fallback). |
+| `secrets.existingSecretName` | **Preferred**: a pre-created Secret carrying `ADMIN_API_TOKEN`, `INTERNAL_API_SECRET`, `TRANSCRIPTION_SERVICE_TOKEN`, `VEXA_DISPATCH_SIGNING_KEY`, and the model-auth keys below. |
+| `secrets.adminApiToken` … | Inline alternatives to the Secret (inline values persist in helm release manifests — prefer `existingSecretName`). |
+| `database.*` / `redisConfig.*` | Point at managed infra (`postgres.enabled=false` / `redis.enabled=false`), or let the chart run them in-cluster. |
+| `models.agentModel` / `models.meetingModel` / `models.anthropic*Model` | Model ids brokered into agents/bots (mirror compose `VEXA_*` / `ANTHROPIC_*`). |
+| `terminal.*` / `ingress.*` | The web workbench and the ingress fronting it. |
+
+The runtime's RBAC (in the chart) grants exactly what Pod spawning needs: `pods`
+create/delete/get/list/watch + `pods/log` get, in the release namespace.
+
+## Model credentials
+
+Worker Pods receive credentials as **environment stamped into the dispatch spec by agent-api**,
+from an explicit allowlist: `CLAUDE_CODE_OAUTH_TOKEN` (the claude CLI subscription token — the
+env twin of compose's `HOST_CLAUDE_CREDENTIALS` mount, since k8s has no host file),
+`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL`, `VEXA_LLM_API_KEY` /
+`VEXA_LLM_BASE_URL`. Nothing outside the allowlist crosses into workers.
+
+Deliver the values onto **agent-api** via `secrets.existingSecretName` (keys above; all env refs
+are optional, so missing keys are fine) or `secrets.claudeCodeOauthToken` /
+`secrets.anthropic*` inline. `VEXA_LLM_*` dials aren't first-class chart values — use
+`agentApi.extraEnv`.
+
+<Note>
+This passthrough lands with **PR #52** (`fix/worker-model-auth-passthrough`). Without it, the
+chart wires `ANTHROPIC_*` onto the long-running deployments but the credentials never reach
+worker Pods — chat dies with `Not logged in` / `Model inference error`.
+</Note>
+
+<Warning>
+Env-delivered tokens are visible in worker Pod specs (`kubectl describe pod` on spawned
+workers). Use `secrets.existingSecretName` rather than inline values, RBAC-scope pod/secret
+reads in the namespace, and prefer the subscription OAuth token or a scoped gateway token over a
+raw provider key.
+</Warning>
+
+## Images
+
+All images are the published `vexaai/v012-*` repos plus `vexaai/vexa-bot` for the meeting bot;
+`global.imageTag` pins them all. The bot image (~3.6 GB) is **pulled by the cluster** when the
+first bot Pod spawns — pre-pull it on your nodes if join latency matters.
+
+## Verifying a deployment
+
+Same discipline as every target — read the config.v1 capability rows:
+
+```bash
+kubectl port-forward svc/vexa-gateway 18056:8000 &
+curl -s http://localhost:18056/health
+# and per-service: meeting-api → stt / object_storage, runtime + agent-api → model_inference
+```
+
+See [Configuration](/configuration) for what each row means and which variables fix a
+`not_configured` / `misconfigured` state.

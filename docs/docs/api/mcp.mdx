@@ -1,0 +1,59 @@
+---
+title: "MCP server"
+description: "Vexum's meeting capabilities as Model Context Protocol tools — for Claude, Cursor, and any MCP client."
+---
+
+The MCP service exposes the public Meetings API as standard **MCP tools and prompts**, so an AI
+client (Claude, Cursor, any MCP-compatible agent) can send bots and read transcripts without a
+bespoke integration. It is **stateless and holds no credentials**: every tool call forwards the
+caller's key to the [gateway](/authentication) as `X-API-Key`, which authorizes it like any other
+API call.
+
+## Connect
+
+The compose stack runs it as the `mcp` service on `127.0.0.1:18010` (`MCP_HOST_PORT`), speaking
+**streamable HTTP** at `/mcp`:
+
+```json
+{
+  "mcpServers": {
+    "vexa": {
+      "type": "http",
+      "url": "http://localhost:18010/mcp",
+      "headers": { "Authorization": "Bearer <VEXA_API_KEY>" }
+    }
+  }
+}
+```
+
+Auth is `Authorization: Bearer <your API key>` (a raw `Authorization` value or `X-API-Key`
+header also works, for back-compat). No key → `401`.
+
+<Note>
+**Direction (maintainer decision):** long-term there is **one MCP server for all of Vexum's
+capabilities, fronted by the gateway** — no separate service. The standalone port is the interim
+exposure until the gateway mounts `/mcp`.
+</Note>
+
+## Tools (9)
+
+| Tool | Wraps |
+|---|---|
+| `parse_meeting_link` | pure — URL → `platform` / `native_meeting_id` / `passcode` |
+| `request_meeting_bot` | `POST /bots` (give it `meeting_url` **or** `native_meeting_id`; a `409` returns `already_exists`) |
+| `get_bot_status` | `GET /bots/status` |
+| `update_bot_config` | `PUT /bots/{platform}/{native}/config` |
+| `stop_bot` | `DELETE /bots/{platform}/{native}` |
+| `list_meetings` | `GET /meetings` |
+| `get_meeting_transcript` | `GET /transcripts/{platform}/{native}` |
+| `list_recordings` | `GET /recordings` |
+| `get_recording` | `GET /recordings/{recording_id}` |
+
+**Prompts (4):** `vexa.meeting_prep` · `vexa.during_meeting` · `vexa.post_meeting` ·
+`vexa.teams_link_help`.
+
+Tools track the wired API surface: `update_bot_config` inherits the
+[mid-call config caveat](/api/meetings#manage-the-bot) (contract-sealed, not wired in 0.12 —
+returns the downstream `404`), and the 0.10.6 tools whose routes 0.12 doesn't mount yet
+(recording config/delete, transcript share links, meeting patch/delete) are deliberately not
+ported until those routes land.

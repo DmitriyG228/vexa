@@ -1,0 +1,52 @@
+---
+title: "Transcript persistence"
+description: "Where transcript data lives: redis is the live tail, postgres is durable — during and after the meeting."
+---
+
+Two stores, one read path:
+
+- **Redis is the live tail.** Incoming segments land in the hash `meeting:{id}:segments` and
+  fan out to WebSocket subscribers immediately. The most recent segment stays **mutable** here
+  while the engine refines it (drafts arrive `completed: false`).
+- **Postgres is durable.** A background **db-writer** loop flushes settled segments (older than
+  a ~30s immutability threshold) into the `transcriptions` table every ~10s as idempotent
+  upserts, and **only then** trims them from the redis hash — a failed write leaves the hash
+  intact for the next tick. When a meeting reaches a terminal state, a finalizer flushes
+  everything left (mutable tail included), so a finished meeting is durable immediately.
+
+`GET /transcripts/{platform}/{native_meeting_id}` **merges** the durable rows with the in-flight
+redis tail — the same endpoint serves the full transcript mid-meeting and after redis has long
+expired. A redis wipe after the flush loses nothing.
+
+## Per-send sessions
+
+Re-sending a bot to the same meeting link does **not** overwrite anything: each send is its own
+meeting row with its own lifecycle, transcript, and processed output. The live-processing stream
+is keyed by the meeting **row id** (not the reusable native id), so a second run on the same
+link can't clobber the first run's document.
+
+## Processed output is durable too
+
+The meeting copilot's processed view (cleaned notes) persists into the meeting row's `data`
+JSONB as **addressable, versioned views** — `data.processed.views[]`, each carrying its `id`,
+`kind`, the exact processing `params` applied (pipeline/provider/model), the document body, and
+the stream cursor it reflects. Views are upserted by id and ride the existing free-form `data`
+field of `GET /transcripts/…` and `GET /meetings` responses — no contract change. This shape is
+deliberately multi-consumer: meeting-scoped today, workspace-mountable in the
+[multi-workspace direction](/roadmap/multi-workspace).
+
+## Knobs
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DB_WRITER_INTERVAL_S` | `10` | Flush-loop cadence. |
+| `IMMUTABILITY_THRESHOLD` | `30` | Seconds a segment must sit unchanged before it flushes. |
+| `REDIS_SEGMENT_TTL` | — | TTL re-armed on the live hash. |
+
+<Note>
+Durable persistence is restored by **PR #53** (`fix/transcript-db-writer`) — in the earlier 0.12
+release candidates the db-writer had not been carried from 0.10, so transcripts lived only in
+redis and were lost when the hash expired. That was ruled a **regression** against 0.10, not a
+feature: the fix re-adds the parent's loop (no schema migrations) with a regression test that
+wipes redis after the flush and asserts the transcript still serves.
+</Note>

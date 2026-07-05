@@ -2,12 +2,21 @@
   "$schema": "https://mintlify.com/docs.json",
   "name": "Vexum",
   "theme": "mint",
-  "colors": { "primary": "#0d9488", "light": "#2dd4bf", "dark": "#0f766e" },
+  "colors": {
+    "primary": "#0d9488",
+    "light": "#2dd4bf",
+    "dark": "#0f766e"
+  },
   "navigation": {
     "groups": [
       {
         "group": "Start here",
-        "pages": ["index", "quickstart", "authentication"]
+        "pages": [
+          "index",
+          "quickstart",
+          "authentication",
+          "clients/terminal"
+        ]
       },
       {
         "group": "How-to: Meetings",
@@ -15,7 +24,8 @@
           "how-to/overview",
           "how-to/send-a-bot",
           "how-to/stream-transcript",
-          "how-to/recordings"
+          "how-to/recordings",
+          "how-to/webhooks"
         ]
       },
       {
@@ -45,7 +55,9 @@
       },
       {
         "group": "Concepts",
-        "pages": ["concepts"]
+        "pages": [
+          "concepts"
+        ]
       },
       {
         "group": "Architecture",
@@ -56,16 +68,31 @@
           "architecture/streaming",
           "architecture/identity-and-trust",
           "architecture/governance",
-          "architecture/architecture-as-code"
+          "architecture/architecture-as-code",
+          "architecture/transcript-persistence"
         ]
       },
       {
         "group": "API reference",
-        "pages": ["api/meetings", "api/agent", "api/errors"]
+        "pages": [
+          "api/meetings",
+          "api/agent",
+          "api/mcp",
+          "api/errors"
+        ]
       },
       {
         "group": "Deployment & operations",
-        "pages": ["deployment", "configuration", "troubleshooting", "sdks", "changelog"]
+        "pages": [
+          "deployment",
+          "deployment/lite",
+          "deployment/helm",
+          "configuration",
+          "troubleshooting",
+          "case-studies",
+          "sdks",
+          "changelog"
+        ]
       },
       {
         "group": "Roadmap",
@@ -73,6 +100,9 @@
           "roadmap/approach",
           "roadmap/stages",
           "roadmap/status",
+          "roadmap/next",
+          "decisions",
+          "roadmap/multi-workspace",
           "roadmap/swarm"
         ]
       }

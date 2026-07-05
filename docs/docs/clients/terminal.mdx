@@ -1,0 +1,53 @@
+---
+title: "The Terminal workbench"
+description: "The browser workbench over meetings and agents — chat, live transcripts, workspace files, routines."
+---
+
+The **Terminal** is Vexum's primary client: a browser workbench (think a web IDE for knowledge
+work) over the meeting and agent domains. Every deploy target ships it — Compose at
+`http://localhost:13000` (`TERMINAL_PORT`), [Lite](/deployment/lite) at `:3001`, the
+[Helm chart](/deployment/helm) behind its ingress. The hosted demo at
+[core.vexa.ai](https://core.vexa.ai) is this same workbench.
+
+It owns no business logic: every surface talks to the backend through server-side proxies, so
+the gateway/agent-api hosts and any keys never reach the browser.
+
+## Surfaces
+
+| Surface | What you do there |
+|---|---|
+| **Chat** | Talk to your workspace agent — streamed turns, `/`-skill commands, `@`-mentions, git-commit badges on writes, `[[wikilink]]` citations. Composer **mic dictation** streams through the same STT service the bots use. |
+| **Meetings** | Your meetings, live and past — launch/stop a bot on a URL, watch the **live transcript**, read the copilot's processed notes, schedule a bot (the [scheduling intent](/api/meetings#scheduling-intent)). |
+| **Workspace / Knowledge** | The agent's git-backed knowledge graph as a browsable file tree — Markdown/MDX docs render rich (entity chips, wikilinks, frontmatter cards), with instant file search and the agent's real git state. |
+| **Routines** | The cron loop — list, create, enable/disable scheduled agent runs (`/routine` from chat works too). |
+| **Sessions** | Resume past chat sessions. |
+| **Tasks** | Action items surfaced from meetings and routines. |
+| **API Tokens** | Self-serve key management — mint (scopes `bot`/`tx`/`browser`, optional name + expiry), list, revoke. The token value is shown once, at creation. |
+
+## Signing in
+
+The login page self-gates on configured providers: set `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`
+and/or `MICROSOFT_CLIENT_ID`/`MICROSOFT_CLIENT_SECRET` (+ `MICROSOFT_TENANT_ID`, default
+`common`) to show those sign-in buttons; with none set, the dev **type-any-email** login is
+available. Register the OAuth redirect URI as `${NEXTAUTH_URL}/api/auth/callback/google` /
+`…/microsoft` in the provider console. Sessions are signed with `NEXTAUTH_SECRET` — change it,
+and set `NEXTAUTH_URL` to your public origin when fronting the terminal with a reverse proxy
+(see [Deployment](/deployment#publishing-behind-a-reverse-proxy)).
+
+<Note>
+Backend authentication is API-token based; the terminal's OAuth login is a client-session layer
+on top. Enterprise SSO (OIDC/SAML at the backend, SCIM) is on the roadmap, not in 0.12.
+</Note>
+
+## Operator notes
+
+- **Env it needs** (compose wires these): `GATEWAY_URL`, `AGENT_API_URL`, `VEXA_ADMIN_API_URL` +
+  `VEXA_ADMIN_API_KEY` (login + token self-serve), `TRANSCRIPTION_SERVICE_URL`/`_TOKEN` (the
+  `/api/stt` mic-dictation proxy — unset, the mic button reports "not configured" instead of
+  failing silently), `NEXTAUTH_SECRET`/`NEXTAUTH_URL`, OAuth provider creds.
+- **Meetings-only mode** — build the image with `NEXT_PUBLIC_TERMINAL_MODE=meetings` (a
+  build-time arg: changing it means rebuilding) to ship a terminal where only the meetings
+  surfaces register and the server proxy refuses agent-api paths with `404`. For deployments
+  that want meeting capture without the agent domain.
+- The terminal proxies `/ws` to the gateway itself, so a fronting reverse proxy only needs
+  standard WebSocket-upgrade headers.

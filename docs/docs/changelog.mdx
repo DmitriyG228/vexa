@@ -34,6 +34,10 @@ notable line and the migration notes between majors.
   strings — it's now derived from the key.
 - **Use the `/agent/*` prefix** for control-plane routes (the old `/api/*` alias still works during
   transition).
+- **Update your webhook verifier.** 0.10 signed the payload alone (`hmac_sha256(secret, body)`);
+  0.12 signs **`timestamp.body`** and sends the timestamp in `X-Webhook-Timestamp` — a 0.10-era
+  verifier rejects every 0.12 delivery. Recipe and code in
+  [Receive webhooks](/how-to/webhooks#verify-the-signature).
 - **Re-check your secrets.** Set real values for `ADMIN_TOKEN`, `INTERNAL_API_SECRET`,
   `VEXA_DISPATCH_SIGNING_KEY`, and DB/MinIO credentials — see [Configuration](/configuration).
 
@@ -57,7 +61,7 @@ probe), not inferred from planning docs.
 | Mid-call bot config — `PUT /bots/{platform}/{id}/config` (change language/task live) | contract-sealed, not wired | The gateway mounts and forwards it, but the live bot-control plane isn't wired in the open-core meeting-api — authenticated calls return the downstream `404`. Flagged in the [Meetings API](/api/meetings) reference. |
 | Voice agent — `POST /bots/{platform}/{id}/speak` (TTS into the call) | contract-sealed, not wired | Proven at contract level (`acts.v1` + the mock-bot speak-ack gate); the real path returns `404` in the shipped stack. Contract-ready, not user-ready. |
 | Interactive bots beyond speak — in-meeting **chat**, **screen share**, **avatar** | contract-sealed, not wired | The `chat`/`screen`/`avatar` endpoints are in the sealed `api.v1`, but the 0.12 gateway does not mount them (edge probe: `404`). **Planned back in the 0.12.x line** — same honest framing as config/speak. |
-| Transcript **share links** — `POST /transcripts/…/share` + `GET /public/transcripts/{id}.txt` | contract-sealed, not mounted | Verified: both routes are in the sealed `api.v1`; neither is mounted at the 0.12 gateway (edge probe: `404`). The feature was dashboard-coupled in 0.10.x. |
+| Transcript **share links** — `POST /transcripts/…/share` + `GET /public/transcripts/{id}.txt` | contract-sealed, not mounted — **0.12.x fast-follow** | Verified: both routes are in the sealed `api.v1`; neither is mounted at the 0.12 gateway (edge probe: `404`). Ships as a 0.12.x fast-follow — the capability-URL pattern is the stepping stone to the [multi-workspace invite flow](/roadmap/multi-workspace#the-stepping-stone-visitor-transcript-access). |
 | `GET …/participants` — meeting participants endpoint (main PR #453) | post-seal | Merged into `main` after the 1.5.0 seal; **planned back in the 0.12.x line** with the next `api.v1` contract revision. |
 | **`discord`** as a non-bot ingest platform (main PR #452) | post-seal | The 0.12 platform enum is `google_meet` / `zoom` / `teams` — a contract test asserts `DELETE /bots/discord/…` → `422`. **Planned back in the 0.12.x line** with the next `api.v1` contract revision. |
 | Zoom **bring-your-own OBF/ZAK tokens** + native SDK path (main PR #320) | not carried — **planned back in the 0.12.x Zoom track** | Verified: the carved bot joins Zoom via the **web client only** (`buildZoomWebClientUrl` → `app.zoom.us/wc/…/join`); no ZAK/OBF token handling and no native-SDK branch exist yet. Authorized-join (tokens and/or SDK) returns with the 0.12.x Zoom work. |
@@ -105,15 +109,53 @@ probe), not inferred from planning docs.
 - **The lite / compose / helm deploy trio** — `deploy/lite` (the whole control plane in one
   container, process runtime backend), `deploy/compose` (`make all`), and `deploy/helm`
   (`charts/vexa`, bots spawn as Pods via `RUNTIME_BACKEND=k8s`). **All three are supported deploy
-  paths**; lite and helm docs land with the 0.12.x docs push (tracked in `DOCS-GAPS.md`).
+  paths** — [Vexa Lite](/deployment/lite) · [Compose](/deployment) · [Helm](/deployment/helm).
 - **An MCP server for the public API** — the 0.10.6 meeting-control MCP service is ported
   (9 tools + 4 prompts, stateless, every call authorized by the gateway with the caller's key)
-  and runs as its own compose service today. Direction: **one MCP server servicing all of Vexa's
-  capabilities, fronted by the gateway** — no separate service; the standalone port is an interim
-  exposure until the gateway mounts `/mcp`.
-- **The terminal workbench** — the primary client surface (docs pending); the vendored dashboard
-  remains available as an optional compose overlay.
+  and runs as its own compose service today — see [MCP server](/api/mcp). Direction: **one MCP
+  server servicing all of Vexa's capabilities, fronted by the gateway** — no separate service;
+  the standalone port is an interim exposure until the gateway mounts `/mcp`.
+- **The terminal workbench** — the primary client surface ([docs](/clients/terminal)); the
+  vendored dashboard remains available as an optional compose overlay.
 - **Honest roadmap/status docs** — capabilities are claimed only with a green gate behind them.
+
+#### Release hardening (the 0.12.0 rc line)
+
+Fixes landed while proving the release from published images on fresh infrastructure — several
+found by the maintainer's live release-eyeball pass:
+
+- **Transcript persistence restored** (#53) — the 0.10 background db-writer (redis → postgres)
+  had not been carried; transcripts lived only in redis and expired. Ruled a **regression fix,
+  not a feature**: durable transcripts available over REST during *and* after the meeting, no
+  schema migrations, plus durable processed-notes views and per-send session keying. See
+  [Transcript persistence](/architecture/transcript-persistence).
+- **Runtime re-adopts live workloads on restart; evidence-based lifecycle** (#50) — a runtime
+  restart no longer orphans in-meeting bots; an untracked-workload `404` is never treated as
+  bot-gone evidence; stops are confirmed; bots leave gracefully on SIGTERM
+  (`RUNTIME_STOP_GRACE_SEC` / `BOT_SIGTERM_GRACE_MS`).
+- **`config.v1` deployment-config contract** (#49) — per-service config declarations, boot
+  preflight that names every missing key, and capability tri-state rows on `/health` with live
+  probes (the STT auth probe, the credentials file probe). See
+  [Configuration](/configuration#the-config-contract-configv1).
+- **Lite agent worker fixed** (#51) — the lite image's worker launcher pointed at an incomplete
+  tree (chat died on arrival with `No module named 'llm'`, invisibly); process-backend worker
+  output is now captured per workload with an error tail on crash.
+- **Worker model auth on k8s** (#52) — credentials reach worker Pods via an explicit
+  dispatch-env allowlist + chart Secret wiring; helm chat was dead on arrival without it.
+- **Release machinery** — the 11-image publish + compose/lite/helm/bot-spawn validation matrix
+  from published images (#42, #45), the 0.10 behavioral compat suite (#48), worker-image
+  identity gate (#47), `max_concurrent_bots=0` = depleted (#44), STT-less CI env fix (#46).
+
+The incident write-ups behind #49/#50/#53 are kept as operator
+[case studies](/case-studies).
+
+#### Known regression in 0.12.0
+
+- **Speaker attribution on Microsoft Teams and Zoom** — segments transcribe correctly but carry
+  provisional `seg_N` speaker labels: the 0.12 capture kit's speaker binding is wired for
+  Google Meet only, while 0.10 attributed speakers on all platforms. The detection machinery
+  exists in the meeting modules — this is an integration gap, ruled **fixed in 0.12.1**
+  ([roadmap](/roadmap/next)). Google Meet attribution is unaffected.
 
 #### Release-notes decisions (resolved by the maintainer, 2026-07-04)
 

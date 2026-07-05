@@ -1,0 +1,95 @@
+---
+title: "Receive webhooks"
+description: "Get meeting lifecycle events pushed to your endpoint — signed, filtered, retried."
+---
+
+Instead of polling for a meeting to finish, register a webhook: meeting-api POSTs signed
+`webhook.v1` envelopes to your endpoint as meetings advance.
+
+## Register your endpoint
+
+Self-serve, with your own API key (no admin token needed):
+
+```bash PUT /user/webhook
+curl -X PUT "$API_BASE/user/webhook" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "webhook_url": "https://your-app.example.com/hooks/vexa",
+    "webhook_secret": "whsec_your_shared_secret",
+    "webhook_events": { "meeting.completed": true, "meeting.status_change": true }
+  }'
+```
+
+Read it back (the secret never returns in the clear — it's masked to its last 4 chars):
+
+```bash GET /user/webhook
+curl -H "X-API-Key: $API_KEY" "$API_BASE/user/webhook"
+# {"webhook_url":"https://…","webhook_secret_set":true,"webhook_secret":"********cret","webhook_events":{…}}
+```
+
+## Events
+
+Every delivery is one `webhook.v1` envelope:
+
+```json
+{
+  "event_id": "evt_9c2ab41f…",
+  "event_type": "meeting.completed",
+  "api_version": "2026-03-01",
+  "created_at": "2026-07-05T12:34:56Z",
+  "data": { "meeting": { "id": 42, "platform": "google_meet", "status": "completed", "…": "…" } }
+}
+```
+
+- `meeting.status_change` fires on **every** lifecycle advance (`data.status_change` carries the
+  transition); the typed events `meeting.started`, `meeting.completed`, and `bot.failed` fire
+  additionally on their transitions.
+- `webhook_events` is your per-event filter (`{event_type: bool}`). **With no filter configured,
+  only `meeting.completed` is delivered** — opt in to the rest explicitly.
+
+## Verify the signature
+
+With a `webhook_secret` set, each delivery carries:
+
+| Header | Value |
+|---|---|
+| `X-Webhook-Signature` | `sha256=<hex hmac>` |
+| `X-Webhook-Timestamp` | unix seconds the signature was computed at |
+| `Authorization` | `Bearer <secret>` (legacy back-compat) |
+
+The signature is **HMAC-SHA256 over `"<timestamp>." + raw_body`** with your shared secret.
+Verify with a constant-time compare, and reject stale timestamps to close the replay window:
+
+```python
+import hashlib, hmac
+
+def verify(body: bytes, headers: dict, secret: str) -> bool:
+    sig, ts = headers.get("X-Webhook-Signature"), headers.get("X-Webhook-Timestamp")
+    if not sig or not ts:
+        return False
+    expected = "sha256=" + hmac.new(secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, expected)
+```
+
+<Warning>
+**Breaking change vs 0.10:** 0.10 signed the payload alone (`hmac(secret, body)`); 0.12 signs
+**`timestamp.body`** and adds `X-Webhook-Timestamp`. A 0.10-era verifier rejects every 0.12
+delivery — update it to the recipe above. See
+[Changelog → Migrating from 0.10](/changelog#migrating-from-010).
+</Warning>
+
+## Delivery, retries, and the SSRF guard
+
+- **Retry**: a `2xx` marks the delivery done; a `5xx`/`429` (or timeout) re-enqueues it with
+  backoff **1m → 5m → 30m → 2h** (5 attempts total, sync try included); any other `4xx` is a
+  permanent failure and is not retried. Deliveries older than **24h**, or that exhaust the
+  schedule, land in a dead-letter list (`webhook:dead_letter` in redis) instead of vanishing.
+- **SSRF guard**: `webhook_url` must be `http(s)` and must not resolve to private, loopback,
+  link-local (cloud metadata), or multicast ranges, nor to the stack's internal hostnames. The
+  transport **pins** the validated IP at connect time, closing the DNS-rebinding window.
+
+<Note>
+The SSRF guard means you cannot point a webhook at a receiver on a private address — including
+your own laptop on a LAN. For local development, expose your receiver through a public tunnel
+(e.g. `cloudflared`, `ngrok`) and register the public URL.
+</Note>

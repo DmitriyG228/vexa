@@ -23,12 +23,22 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
 - **Concurrency cap** — a user can run at most `max_concurrent_bots` bots at once (set when the user was
   created). Stop an existing bot or raise the cap.
 
+## `POST /bots` returns 503 "STT service is not configured"
+
+Fail-loud by design: a transcription bot without STT would only produce dead air, so the spawn
+is rejected at the gate. Set `TRANSCRIPTION_SERVICE_URL` + `TRANSCRIPTION_SERVICE_TOKEN`
+([Configuration](/configuration#transcription-stt)), or opt out explicitly
+(`"transcribe_enabled": false` per spawn, or `TRANSCRIBE_ENABLED=false` deployment-wide) for
+capture-only bots.
+
 ## Bot joins but there's no transcript
 
-The bot is capturing audio, but transcription isn't configured.
+The bot is capturing audio, but transcription isn't working.
 
-- Confirm `TRANSCRIPTION_SERVICE_URL` and `TRANSCRIPTION_SERVICE_TOKEN` are set (see
-  [Configuration](/configuration#transcription-stt)). Unset → audio is recorded, no text is produced.
+- **Check meeting-api's `/health` capability rows first**: `curl -s localhost:18080/health | jq
+  .capabilities.stt`. `misconfigured` with a `401/403` probe reason = your token is **set but
+  rejected** — the worst silent failure; fix the token, not the bots. See the
+  [case study](/case-studies#1--the-rejected-stt-token--silent-transcript-less-meetings).
 - Segments arrive draft-first (`completed: false`) then confirmed (`completed: true`) — a short delay is
   normal, not a failure.
 - A stale bot key shows up as `native_resolve:{ok:false,kind:"unauthorized"}` on
@@ -53,6 +63,15 @@ The [runtime](/core/runtime) spawns bot and agent containers via the Docker sock
   **without pulling** — it must exist locally first. Confirm it's there (`docker image inspect "$BROWSER_IMAGE"`);
   the published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. `AGENT_IMAGE` is built by
   `make all` — confirm it resolves and `IMAGE_TAG` matches what you built.
+
+## Chat fails with "Model inference error" / "Not logged in"
+
+The agent worker spawned but has no model credential. Check `model_inference` on the runtime's
+and agent-api's `/health` — `not_configured` means no credential path is set at all;
+`misconfigured` with reason `directory` means `HOST_CLAUDE_CREDENTIALS` points at a missing host
+path (Docker bind-mounted it as an empty directory). Fix per your deploy target — the three
+mechanisms are in [Configuration → Model credentials](/configuration#model-credentials-on-each-deploy-target)
+(docker: host credentials file bind-mount; k8s: Secret-fed env passthrough; lite: container env).
 
 ## Agent write was rejected
 
