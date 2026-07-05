@@ -1,0 +1,62 @@
+---
+title: "Operating principles"
+description: "The design principles behind Vexa's deployment, configuration, and transcription reliability — declared capabilities, evidence-based lifecycle, durable two-store persistence."
+---
+
+Vexa is built so that a fault is **loud and attributable before it costs you a meeting**. These
+are the principles the stack operates by, and the concrete machinery behind each one.
+
+## Capabilities declare themselves
+
+Every configuration key a service reads is **declared** in a sealed per-service `config.v1`
+declaration (required-explicit / defaulted / capability classes). The declaration is
+contract-checked against every deploy surface (compose, lite, helm) in CI in both directions —
+an undeclared knob or an unwired one fails the gate, not the deployment.
+
+At runtime, capabilities are **tri-state rows on `/health`** (`ok` / `misconfigured` /
+`not_configured`), backed by **live probes** with your real endpoints and credentials: the `stt`
+capability probes the transcription service with the configured token; `model_inference` probes
+the credential file the workers will actually read. A misconfigured capability — including a
+credential that is *set but rejected* — is visible on `/health` before any meeting runs.
+
+See [Configuration → the config contract](/configuration#the-config-contract-configv1).
+
+## Lifecycle requires evidence
+
+Meeting state advances only on **proof**: a tracked workload's terminal state with its real exit
+code, or the bot's own `lifecycle.v1` callback. A runtime `404` for a workload it doesn't track
+is "untracked" — never evidence the bot is gone.
+
+Runtimes **re-adopt their workloads across restarts**: workloads carry adoption labels, and on
+boot the runtime re-attaches to still-live containers/Pods (and adopts exited ones with their
+exit code as evidence), so a restart never orphans an in-meeting bot.
+
+Stops **verify termination**: a stop isn't done until termination is confirmed — unconfirmed
+stops stay `stopping` and are retried — and the bot handles SIGTERM with a graceful leave inside
+a bounded grace window (`RUNTIME_STOP_GRACE_SEC` / `BOT_SIGTERM_GRACE_MS`).
+
+## Two-store persistence
+
+Transcripts live in two stores with distinct jobs: **redis is the live tail** (low-latency
+segments while the meeting runs), **postgres is the durable record**. A background db-writer
+flushes settled segments to postgres, trims redis **only after the confirmed write**, and
+finalizes everything at meeting completion. The read path **merges both stores**, so
+`GET /transcripts` serves the same answer during and after the meeting — and after any redis
+expiry. A regression test enforces the guarantee directly: flush, wipe redis, assert the
+transcript still serves.
+
+See [Transcript persistence](/architecture/transcript-persistence).
+
+## Fail loud, with actionable messages
+
+A spawn that can't do what was asked is rejected with a typed error naming the exact variables
+to set; a misconfigured credential shows on `/health` with the probe's reason, not as empty
+output later. No capability fails silently. See the
+[decisions register](/decisions#fail-loud-with-evidence-2026-07-04).
+
+## Fix the class, not the instance
+
+Deploy targets share configuration classes: a config fix discovered on one target (compose,
+lite, or helm) is swept across all of them, and **capability parity** across the three
+validation stacks is a release check. See the
+[decisions register](/decisions#fix-the-class-not-the-instance-2026-07-05).

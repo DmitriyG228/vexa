@@ -1,6 +1,6 @@
 ---
 title: "Troubleshooting"
-description: "The common failures, what causes them, and how to fix them."
+description: "Symptom-to-remedy guide for deployment, configuration, and transcription: bot joins, STT setup, model credentials, authentication."
 ---
 
 ## Bot won't join the meeting
@@ -36,9 +36,9 @@ capture-only bots.
 The bot is capturing audio, but transcription isn't working.
 
 - **Check meeting-api's `/health` capability rows first**: `curl -s localhost:18080/health | jq
-  .capabilities.stt`. `misconfigured` with a `401/403` probe reason = your token is **set but
-  rejected** — the worst silent failure; fix the token, not the bots. See the
-  [case study](/case-studies#1--the-rejected-stt-token--silent-transcript-less-meetings).
+  .capabilities.stt`. `misconfigured` with a `401/403` probe reason means your
+  `TRANSCRIPTION_SERVICE_TOKEN` is **set but rejected** by the STT endpoint — fix the token, not
+  the bots. See [Operating principles → capabilities declare themselves](/principles#capabilities-declare-themselves).
 - Segments arrive draft-first (`completed: false`) then confirmed (`completed: true`) — a short delay is
   normal, not a failure.
 - A stale bot key shows up as `native_resolve:{ok:false,kind:"unauthorized"}` on
@@ -72,6 +72,12 @@ and agent-api's `/health` — `not_configured` means no credential path is set a
 path (Docker bind-mounted it as an empty directory). Fix per your deploy target — the three
 mechanisms are in [Configuration → Model credentials](/configuration#model-credentials-on-each-deploy-target)
 (docker: host credentials file bind-mount; k8s: Secret-fed env passthrough; lite: container env).
+
+## `LLMConfigError: no completion endpoint`
+
+The LLM provider selection is incomplete: `VEXA_LLM_PROVIDER=openai-compat` (the default) needs
+`VEXA_LLM_BASE_URL` set to a completion endpoint, or switch provider (`VEXA_LLM_PROVIDER=anthropic`
+or `claude-cli`). See [Configuration → `VEXA_LLM_PROVIDER`](/configuration#vexa_llm_provider).
 
 ## Agent write was rejected
 

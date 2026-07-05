@@ -44,9 +44,8 @@ deliberately multi-consumer: meeting-scoped today, workspace-mountable in the
 | `REDIS_SEGMENT_TTL` | — | TTL re-armed on the live hash. |
 
 <Note>
-Durable persistence is restored by **PR #53** (`fix/transcript-db-writer`) — in the earlier 0.12
-release candidates the db-writer had not been carried from 0.10, so transcripts lived only in
-redis and were lost when the hash expired. That was ruled a **regression** against 0.10, not a
-feature: the fix re-adds the parent's loop (no schema migrations) with a regression test that
-wipes redis after the flush and asserts the transcript still serves.
+Persistence is **two-store by design**: redis is the live tail, postgres the durable record, and
+the read path merges both (PR #53, no schema migrations). The guarantee is tested directly — a
+test flushes, wipes redis, and asserts `GET /transcripts` still serves. See
+[Operating principles → two-store persistence](/principles#two-store-persistence).
 </Note>

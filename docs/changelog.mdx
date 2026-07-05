@@ -66,8 +66,8 @@ probe), not inferred from planning docs.
 | **`discord`** as a non-bot ingest platform (main PR #452) | post-seal | The 0.12 platform enum is `google_meet` / `zoom` / `teams` — a contract test asserts `DELETE /bots/discord/…` → `422`. **Planned back in the 0.12.x line** with the next `api.v1` contract revision. |
 | Zoom **bring-your-own OBF/ZAK tokens** + native SDK path (main PR #320) | not carried — **planned back in the 0.12.x Zoom track** | Verified: the carved bot joins Zoom via the **web client only** (`buildZoomWebClientUrl` → `app.zoom.us/wc/…/join`); no ZAK/OBF token handling and no native-SDK branch exist yet. Authorized-join (tokens and/or SDK) returns with the 0.12.x Zoom work. |
 | **Segment-latency env knobs** (main PR #447: `MIN_AUDIO_DURATION_SEC`, `SUBMIT_INTERVAL_SEC`, `IDLE_TIMEOUT_SEC`) | partial | The three knobs exist as **programmatic** config (`SpeakerStreamManagerConfig`: `minAudioDuration` / `submitInterval` / `idleTimeoutSec`), but nothing reads them from the environment — a deployment cannot opt into low-latency mode without code. |
-| `max_concurrent_bots=0` treated as **depleted, not unlimited** (main PR #456) | **carried (fixed 2026-07-04)** | The gap was found while fact-checking this page and fixed the same day (0.12 PR #44, mirroring main's #456): a cap of `0` now rejects the spawn as depleted, with a regression test. |
-| Swagger/OpenAPI **auth-scheme fixes** (main PRs #319, #336) | not carried | The 0.12 admin-api declares both `APIKeyHeader`s **without `scheme_name`** — the exact collapsed-scheme Swagger bug #319 fixed; the 0.12 gateway declares no OpenAPI security schemes at all. Cosmetic-but-real DX gap in the *served* docs (the sealed contract is unaffected). |
+| `max_concurrent_bots=0` treated as **depleted, not unlimited** (main PR #456) | **carried** | A cap of `0` rejects the spawn as depleted (0.12 PR #44, mirroring main's #456), with a test asserting the behavior. |
+| Swagger/OpenAPI **auth-scheme fixes** (main PRs #319, #336) | not carried | The 0.12 admin-api declares both `APIKeyHeader`s without `scheme_name`, and the 0.12 gateway declares no OpenAPI security schemes — a DX gap in the *served* Swagger docs (the sealed contract is unaffected). |
 | Dashboard-authz + schedule-callback hardening (main PR #406) | superseded by architecture | 0.12 scheduling compiles `schedule.v1` jobs that the runtime scheduler fires internally — there is no exposed schedule-callback endpoint to harden. The vendored dashboard rides as an optional compose overlay behind the gateway. |
 | Hardened Python Docker builds (main PR #435) | superseded | 0.12 rebuilt all of its images. |
 
@@ -119,42 +119,35 @@ probe), not inferred from planning docs.
   vendored dashboard remains available as an optional compose overlay.
 - **Honest roadmap/status docs** — capabilities are claimed only with a green gate behind them.
 
-#### Release hardening (the 0.12.0 rc line)
+#### Reliability in 0.12.0
 
-Fixes landed while proving the release from published images on fresh infrastructure — several
-found by the maintainer's live release-eyeball pass:
-
-- **Transcript persistence restored** (#53) — the 0.10 background db-writer (redis → postgres)
-  had not been carried; transcripts lived only in redis and expired. Ruled a **regression fix,
-  not a feature**: durable transcripts available over REST during *and* after the meeting, no
-  schema migrations, plus durable processed-notes views and per-send session keying. See
-  [Transcript persistence](/architecture/transcript-persistence).
-- **Runtime re-adopts live workloads on restart; evidence-based lifecycle** (#50) — a runtime
-  restart no longer orphans in-meeting bots; an untracked-workload `404` is never treated as
-  bot-gone evidence; stops are confirmed; bots leave gracefully on SIGTERM
+- **Durable transcript persistence** (#53) — transcripts persist durably to postgres and are
+  available from REST during *and* after the meeting; the read path merges the live redis tail
+  with the durable record; no schema migrations; plus durable processed-notes views and per-send
+  session keying. See [Transcript persistence](/architecture/transcript-persistence).
+- **Evidence-based meeting lifecycle** (#50) — the runtime re-adopts its workloads across
+  restarts; an untracked-workload `404` is never treated as termination evidence; stops are
+  confirmed; bots leave gracefully on SIGTERM
   (`RUNTIME_STOP_GRACE_SEC` / `BOT_SIGTERM_GRACE_MS`).
 - **`config.v1` deployment-config contract** (#49) — per-service config declarations, boot
   preflight that names every missing key, and capability tri-state rows on `/health` with live
   probes (the STT auth probe, the credentials file probe). See
   [Configuration](/configuration#the-config-contract-configv1).
-- **Lite agent worker fixed** (#51) — the lite image's worker launcher pointed at an incomplete
-  tree (chat died on arrival with `No module named 'llm'`, invisibly); process-backend worker
-  output is now captured per workload with an error tail on crash.
+- **Lite agent worker** (#51) — the lite image ships a complete worker tree; process-backend
+  worker output is captured per workload with an error tail on crash.
 - **Worker model auth on k8s** (#52) — credentials reach worker Pods via an explicit
-  dispatch-env allowlist + chart Secret wiring; helm chat was dead on arrival without it.
+  dispatch-env allowlist + chart Secret wiring.
 - **Release machinery** — the 11-image publish + compose/lite/helm/bot-spawn validation matrix
   from published images (#42, #45), the 0.10 behavioral compat suite (#48), worker-image
   identity gate (#47), `max_concurrent_bots=0` = depleted (#44), STT-less CI env fix (#46).
 
-The incident write-ups behind #49/#50/#53 are kept as operator
-[case studies](/case-studies).
+The design principles behind #49/#50/#53 are described in
+[Operating principles](/principles).
 
 #### Known regression in 0.12.0
 
 - **Speaker attribution on Microsoft Teams and Zoom** — segments transcribe correctly but carry
-  provisional `seg_N` speaker labels: the 0.12 capture kit's speaker binding is wired for
-  Google Meet only, while 0.10 attributed speakers on all platforms. The detection machinery
-  exists in the meeting modules — this is an integration gap, ruled **fixed in 0.12.1**
+  provisional `seg_N` speaker labels on Teams and Zoom in 0.12.0; fixed in **0.12.1**
   ([roadmap](/roadmap/next)). Google Meet attribution is unaffected.
 
 #### Release-notes decisions (resolved by the maintainer, 2026-07-04)

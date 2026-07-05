@@ -46,16 +46,17 @@ find it. — ADR-0026, [Configuration](/configuration#the-config-contract-config
 No state transition without evidence, no capability failing silently. A runtime `404` is
 "untracked", never proof a workload is gone; a stop isn't done until termination is confirmed; a
 misconfigured credential shows up on `/health`, not as empty output hours later; a spawn that
-can't do what was asked is rejected with a typed error naming the fix. *Why:* the release
-hardening showed every painful incident was a **silent** fault — see the
-[case studies](/case-studies). — PRs #49/#50/#53.
+can't do what was asked is rejected with a typed error naming the fix. *Why:* silent faults
+are the most expensive class of fault — every mechanism here exists to make a fault loud and
+attributable. See [Operating principles](/principles). — PRs #49/#50/#53.
 
 ## Fix the class, not the instance (2026-07-05)
 
 A configuration fix discovered on one deploy target is **immediately swept across all targets**
 (compose, lite, helm), and capability parity across the three validation stacks is a release
-check. *Why:* the same STT-wiring gap was hit on all three targets, sequentially, in one night —
-repeating a same-class failure across targets is treated as a process violation, not bad luck.
+check. *Why:* the deploy targets share configuration classes — a fix applied to only one target
+leaves the same class open on the others, so same-class recurrence across targets is treated as
+a process violation, not bad luck.
 
 ## Docs along the way (2026-07-05)
 
@@ -71,8 +72,8 @@ A release has a written definition of done: all images published and referenced,
 resolved, every deploy target proven **from the published images on fresh infrastructure**, the
 maintainer **personally eyeballs** the client on each target and live meetings on the real
 platforms, backward compatibility validated behaviorally, core parity re-checked, docs updated.
-*Why:* "CI is green" is not "it works" — the release-eyeball pass caught defects every automated
-leg missed.
+*Why:* "CI is green" is not "it works" — a human pass over the live product catches classes of
+defect no automated leg is written for.
 
 ## No migrations on a release line (2026-07-05)
 

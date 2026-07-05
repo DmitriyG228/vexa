@@ -90,7 +90,7 @@
           "deployment/helm",
           "configuration",
           "troubleshooting",
-          "case-studies",
+          "principles",
           "sdks",
           "changelog"
         ]

@@ -172,9 +172,9 @@ Two paths — configure exactly one:
 
 <Warning>
 **The docker mount pitfall:** if `HOST_CLAUDE_CREDENTIALS` points at a path that doesn't exist,
-Docker silently creates it as an **empty directory** inside the worker — which used to surface
-only as `Model inference failed: Not logged in` at chat time. The same path is now mirror-mounted
-into the runtime container so its config.v1 **file probe** catches this: a bad path shows as
+Docker creates it as an **empty directory** inside the worker, and the worker's claude CLI
+fails at chat time with `Model inference failed: Not logged in`. The same path is mirror-mounted
+into the runtime container so its config.v1 **file probe** catches this early: a bad path shows as
 `model_inference: misconfigured` (reason `directory` / `unreadable` / `non-json`) on the
 runtime's `/health` before anyone opens a chat.
 </Warning>
