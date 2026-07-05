@@ -26,6 +26,10 @@ getting there is the [decisions register](/decisions); current proven state is
   capability rows across the compose/lite/helm validation stacks; any asymmetry fails the
   release ([fix the class, not the instance](/decisions#fix-the-class-not-the-instance)).
 
+- **Governed GitHub pull + auto-sync** — a *Pull from GitHub* workspace action: fast-forward
+  applies directly; a divergent remote is merged by the workspace agent as an attributed turn
+  (the agent is the merge policy — never force, never a silent overwrite). Opt-in auto-sync via
+  GitHub webhooks through the event ingress follows.
 - **Docs verification sealing** — extend the seal culture to the corpus, three tiers:
   (1) *generate* the highest-drift references from their machine truths — the API reference
   renders from the sealed `api.v1` OpenAPI, the configuration tables from the `config.v1`

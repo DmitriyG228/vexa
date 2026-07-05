@@ -54,6 +54,20 @@ to GitHub is a **governed action**: the push adapter uses per-user brokered cred
 (the token lives on the remote only for the duration of the push, then is scrubbed), and
 push flows are part of the [proposal-gated VCS direction](/roadmap/next) — write access
 to your repos always crosses an explicit gate, never happens as a side effect.
+## Syncing with GitHub
+
+What syncs when, in 0.12.0:
+
+| Direction | How | When |
+|---|---|---|
+| Vexa → GitHub | **Publish** (first time) / **Push updates** (after) on the workspace row | on demand — plain fast-forward push, never force |
+| GitHub → Vexa | not yet automatic — attaching clones **once**; later pushes to GitHub are not pulled | re-attach with *start fresh* to take a new clone (your previous tree is parked, not lost) |
+| Your laptop ↔ GitHub | normal git — clone the published repo, pull/push | GitHub is the hub; the vexa workspace is one clone of it |
+
+A governed **Pull from GitHub** action (fast-forward applies; real divergence is merged by the
+workspace's agent as an attributed turn — never a force, never a silent overwrite) and opt-in
+auto-sync via GitHub webhooks are on the [roadmap](/roadmap/next).
+
 ## Publish a vexa-born workspace to GitHub
 
 A workspace that started life inside vexa (seeded from the template, not attached from
