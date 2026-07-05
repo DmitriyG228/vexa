@@ -28,13 +28,13 @@ getting there is the [decisions register](/decisions); current proven state is
 
 - **Docs verification sealing** — extend the seal culture to the corpus, three tiers:
   (1) *generate* the highest-drift references from their machine truths — the API reference
-  renders from the sealed  OpenAPI, the configuration tables from the 
-  declarations — generated pages cannot drift by construction; (2) ** — both-ways
-  coverage and existence checks in the  style (every declared key/sealed
+  renders from the sealed `api.v1` OpenAPI, the configuration tables from the `config.v1`
+  declarations — generated pages cannot drift by construction; (2) *`gate:docs`* — both-ways
+  coverage and existence checks in the `gate:config-contract` style (every declared key/sealed
   capability has a page; every key or endpoint mentioned in MDX exists in the declarations/sealed
   spec; links and nav resolve), mutation-tested; (3) *source-coupled freshness seal* — each page
-  declares the tree paths it documents ( frontmatter) and the commit it was verified
-  against, recorded in ; the gate goes red when a page's sources change without
+  declares the tree paths it documents (`sources:` frontmatter) and the commit it was verified
+  against, recorded in `docs.seal.json`; the gate goes red when a page's sources change without
   the page acknowledging it. Prose truthfulness (tier 4) is not gate-able: a scheduled
   adversarial docs-review routine probes recently re-sealed pages against the tree. The 0.12.0
   corpus (tree-verified at review time) is the sealing baseline.
