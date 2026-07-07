@@ -1,0 +1,69 @@
+---
+title: "Multi-workspace direction"
+description: "Accepted design direction for 0.12.x: shared workspaces, live-meeting collaboration, and how sharing, privacy, and attribution work."
+---
+
+<Note>
+This page documents **accepted design direction**, decided during the 0.12 release line — not
+shipped functionality. It is here so the direction constrains current work (the transcript and
+processed-doc storage shapes already honor it) and so the intent is public before the design doc
+lands.
+</Note>
+
+Today a user has one workspace. The direction: **users hold multiple workspaces, several of them
+attachable to one agent, some of them shared** — with meetings as the place sharing starts.
+
+A key property of the model: an agent works over a **mount set**, not a single workspace.
+On a meeting, every participant's agent has their private workspace and the community's
+shared workspace active at once — shared output (notes, common entities, action items)
+lands in the shared space, personal content stays private, and the shared workspace is
+long-lived: it accumulates across meetings into the team's common knowledge graph rather
+than starting fresh each time.
+
+## The decisions
+
+**1 · Every user gets a required, private system workspace.** A git repo like every workspace,
+holding the user's chats, settings, routines, and the records of which workspaces are attached
+to which chats. Chats **never** live in a project or shared workspace — privacy is a structural
+boundary, not a policy flag. Postgres keeps the *index* (memberships, attachments), never chat
+content.
+
+**2 · Sharing is membership, not git credentials.** An invite (e.g. a link dropped in meeting
+chat) carries a scoped token; accepting it creates a membership row that the gateway and
+workspace policy enforce. Clients keep speaking the platform APIs — git remains a server-side
+implementation detail. Per-user git credentials come later, if at all, as a personal
+export/portability feature.
+
+**3 · Concurrency is agent-mediated serialization.** All writes to a shared workspace queue
+through that workspace's **agent unit** — the agent *is* the merge policy. No concurrent git
+pushes, no CRDTs in v1: contributions of ~20 concurrent participants are applied as
+policy-gated, near-instant merges by one writer.
+
+**4 · Attribution is preserved, humans-only.** Commits carry git `author` = the authenticated
+human principal from the dispatch (never client-reported), `committer` = the platform, and
+`Co-authored-by` trailers for blended contributions. AI appears as a trailer, never as an
+author.
+
+## The flagship use case: the meeting as a shared workspace
+
+Twenty people in one live meeting. Someone drops the invite link in the meeting chat; each
+participant who accepts becomes a member of a **shared workspace with the shared real-time
+transcript** mounted. Everyone works the same live material — asking their agent for decisions
+so far, drafting follow-ups, filing action items — with writes merging near-instantly through
+the workspace agent, while each participant's **private workspaces coexist on the same
+meeting** (private notes next to the shared record). The meeting stops being
+record-now-share-later and becomes real-time, AI-leveraged collaborative work.
+
+This is why transcripts and processed views are stored as **addressable, multi-consumer
+artifacts** ([Transcript persistence](/architecture/transcript-persistence)) — meeting-scoped
+today, workspace-mountable tomorrow, never fields fused to a single reader.
+
+## The stepping stone: visitor transcript access
+
+The sealed `api.v1` already carries a share surface: `POST /transcripts/{platform}/{native}/share`
+mints a short-lived public capability URL, and `GET /public/transcripts/{share_id}.txt` serves
+the transcript to anyone holding it. In 0.12.0 these routes are **sealed but not yet mounted**
+(they return `404` — see the [parity table](/changelog#not-yet-in-012)); they ship as a 0.12.x
+fast-follow. The pattern matters beyond the feature: a **scoped capability URL granting a
+visitor access to meeting material** is exactly the primitive the invite/membership flow above
+generalizes.

@@ -7,6 +7,14 @@ This is the one-page index of the system: **which module owns what**, **which se
 contracts join them**, and **how each level is proven**. Every module entry links to its
 in-tree README — the README is the source of truth; this page is the map.
 
+<Note>
+  The whole architecture is governed by
+  [Architecture — the Constitution](/ARCHITECTURE)
+  — the governing reference: the full principle set (P1–P21, P23), each tied to the established
+  practice it comes from and the CI gate that enforces it. The readable public projection of
+  those principles is [Operating principles](/principles).
+</Note>
+
 ## The module tree
 
 Five core domains, a client, and the composition layer. Each domain owns its contracts +
@@ -93,7 +101,7 @@ sha256 per contract; CI fails if a sealed schema drifts. Grouped by owning modul
 ## Eval levels — the validation pyramid
 
 Every change is proven at the lowest level that can catch it. Governed by
-`docs/ARCHITECTURE.md`; the live gate lives at
+[`docs/ARCHITECTURE.md`](https://github.com/Vexa-ai/vexa-core/blob/main/docs/ARCHITECTURE.md); the live gate lives at
 [`core/meetings/eval`](https://github.com/Vexa-ai/vexa-core/tree/main/core/meetings/eval/README.md).
 
 | Level | Name | What it proves | Where |

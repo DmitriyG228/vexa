@@ -27,14 +27,21 @@ The only thing that changes between platforms is the `platform` value.
   </Tab>
   <Tab title="Microsoft Teams">
     ```bash
+    # send the FULL invite link as meeting_url — Teams passcodes travel inside it (?p=...)
     curl -X POST "$API_BASE/bots" \
       -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-      -d '{"platform":"teams","native_meeting_id":"<meeting-id>","bot_name":"Vexa"}'
+      -d '{"platform":"teams","native_meeting_id":"9361792952021",
+           "meeting_url":"https://teams.live.com/meet/9361792952021?p=IXw5JhZRdoBvKnUXPy",
+           "bot_name":"Vexa"}'
     ```
+    Most Teams meetings are passcode-protected; an id without the link drops the passcode and
+    the bot is refused. Zoom likewise needs the full `meeting_url`.
   </Tab>
 </Tabs>
 
-`native_meeting_id` is the id **inside** the join URL (e.g. `abc-defg-hij` for Meet), not the whole URL.
+`native_meeting_id` is the id **inside** the join URL (e.g. `abc-defg-hij` for Meet), not the whole URL —
+the per-platform id and passcode rules are in the
+[Meetings API](/api/meetings#meeting-ids-and-passcodes-per-platform).
 Optional: `language` (ISO code, omit to auto-detect) and `task` (`transcribe` default, or `translate`).
 
 On Meet and Teams the bot may wait in the lobby until a host admits it.

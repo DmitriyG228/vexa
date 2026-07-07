@@ -34,16 +34,35 @@ The bot joins like any participant — no plugins, no host configuration.
 ## Send a bot to a meeting
 
 <ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams`</ParamField>
-<ParamField body="native_meeting_id" type="string" required>The meeting id from the join URL (e.g. `abc-defg-hij`).</ParamField>
+<ParamField body="native_meeting_id" type="string">The meeting id from the join URL (e.g. `abc-defg-hij`). Required unless `meeting_url` is given.</ParamField>
+<ParamField body="meeting_url" type="string">The full join URL. **Required for Zoom** (an id alone isn't joinable) and **for passcode-protected Teams meetings** — the passcode travels inside the URL. For Meet/Teams without a passcode the URL is constructed from the id.</ParamField>
 <ParamField body="bot_name" type="string">Display name the bot uses in the call. Defaults to `Vexa`.</ParamField>
 <ParamField body="language" type="string">ISO code (e.g. `en`); omit to auto-detect.</ParamField>
 <ParamField body="task" type="string">`transcribe` (default) or `translate`.</ParamField>
+<ParamField body="transcribe_enabled" type="boolean">Default from `TRANSCRIBE_ENABLED` (`true`). With STT unconfigured, a transcription spawn is rejected `503` — pass `false` for a capture-only bot.</ParamField>
+<ParamField body="recording_enabled" type="boolean">Default from `RECORDING_ENABLED` (`true`).</ParamField>
 
 ```bash POST /bots
 curl -X POST "$API_BASE/bots" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
   -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","bot_name":"Vexa","language":"en"}'
 ```
+
+### Meeting ids and passcodes per platform
+
+| Platform | `native_meeting_id` | Passcode |
+|---|---|---|
+| Google Meet | the code in the URL — `abc-defg-hij` (custom Workspace nicknames also work, Workspace accounts only) | — |
+| Microsoft Teams | the numeric id (10–15 digits) from `teams.live.com/meet/<id>`, or the enterprise `meetup-join` id | **in the URL** — pass the full link as `meeting_url` (personal links carry `?p=<passcode>`) |
+| Zoom | the numeric id (10–11 digits) | in the URL — `meeting_url` required for Zoom anyway (`?pwd=…`) |
+
+<Note>
+**Teams:** most Teams meetings are passcode-protected. `POST /bots` has no separate passcode
+field — the bot joins the URL you give it, so send the **full invite link** as `meeting_url`
+(keep the `?p=` part) alongside `native_meeting_id`. Constructing from the id alone drops the
+passcode and the bot will be refused. The [MCP `parse_meeting_link` tool](/api/mcp) extracts
+platform / id / passcode from any invite link.
+</Note>
 
 ## Get the transcript
 
@@ -108,6 +127,23 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings"
 ```bash Single meeting — GET /meetings/{meeting_id}
 curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings/12345"
 ```
+
+## Scheduling intent
+
+Mark a meeting as scheduled-for-later (or back to idle) without touching the bot lifecycle —
+the terminal's meeting dropdown drives this same endpoint:
+
+```bash PUT /meetings/{platform}/{native_meeting_id}/intent
+curl -X PUT "$API_BASE/meetings/google_meet/abc-defg-hij/intent" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"intent":"scheduled","at":"2026-07-06T15:00:00Z"}'
+```
+
+- `intent` is `idle` or `scheduled` — these are the two **user-owned, pre-lifecycle** states.
+  Anything the bot lifecycle owns (`requested`, `active`, `completed`, …) is rejected with `422`.
+- `at` (ISO 8601) is required with `scheduled` and lands in the meeting's `data.scheduled_at`.
+- The meeting must already exist (a prior send creates it) — otherwise `404`. Idempotent: a PUT
+  to the current state changes nothing and emits no status frame.
 
 ## Speaker-attributed transcripts
 

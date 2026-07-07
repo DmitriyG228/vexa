@@ -11,6 +11,7 @@ The guides split by the plane they touch — **meetings**, **agents**, or both c
 | `send-a-bot.mdx` | meetings — send a bot to a live call |
 | `stream-transcript.mdx` | meetings — consume the live transcript stream |
 | `recordings.mdx` | meetings — retrieve recordings + post-meeting artifacts |
+| `webhooks.mdx` | meetings — receive signed lifecycle events at your endpoint |
 | `post-meeting-report.mdx` | meetings → agents — generate a report from a finished meeting |
 | `daily-brief.mdx` | agents — scheduled summarization |
 | `email-triage.mdx` | agents — triage an inbox |

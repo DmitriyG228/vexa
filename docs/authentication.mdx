@@ -68,6 +68,21 @@ A key carries one or more scopes. Pass `scope=<one>` or `scopes=<a>,<b>` when mi
 Keys are prefixed by their primary scope — `vxa_bot_…`, `vxa_tx_…`, `vxa_browser_…`. A key without a
 recognized scope is rejected.
 
+### What each route requires
+
+The gateway enforces scopes per route prefix; a key lacking the scope gets `403`:
+
+| Route prefix | Accepted scopes |
+|---|---|
+| `/bots` | `bot` or `browser` |
+| `/transcripts` | `tx` |
+| `/meetings` | `tx` |
+| `/recordings` | `tx` or `bot` |
+
+So a bot-orchestration service can hold a `bot`-only key that can't read transcripts, and an
+analytics consumer a `tx`-only key that can't send bots; mint `?scopes=bot,tx` for a client that
+does both.
+
 ## Rotating and revoking
 
 Mint a new key, switch your clients over, then delete the old one by its token id:

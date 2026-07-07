@@ -15,14 +15,36 @@ export CARVE_REMOTE="${CARVE_REMOTE:-https://github.com/Vexa-ai/vexa-core.git}"
 
 # --- INCLUDE: the open-core allowlist (paths relative to MONO) ---------------
 # core = runtime+meetings+agents+identity; deploy/compose = the self-host stack;
-# clients/terminal = the reference workbench UI; docs/docs = Mintlify site.
+# clients/terminal = the reference workbench UI.
+# docs/ is FLAT: the Mintlify corpus lives directly under docs/ (docs/docs is gone);
+# the corpus items are enumerated so the mono-only engineering ledgers
+# (LEARNINGS/RELEASE-PLAN/…) never carve into the open-core repo.
 export CARVE_INCLUDE=(
   core
   deploy/compose
   deploy/transcription
   clients/terminal
   clients/slim
-  docs/docs
+  docs/docs.json
+  docs/index.mdx
+  docs/quickstart.mdx
+  docs/authentication.mdx
+  docs/case-studies.mdx
+  docs/changelog.mdx
+  docs/concepts.mdx
+  docs/configuration.mdx
+  docs/decisions.mdx
+  docs/deployment.mdx
+  docs/sdks.mdx
+  docs/troubleshooting.mdx
+  docs/README.md
+  docs/api
+  docs/architecture
+  docs/clients
+  docs/core
+  docs/deployment
+  docs/how-to
+  docs/roadmap
   package.json
   pnpm-workspace.yaml
   pnpm-lock.yaml
@@ -80,7 +102,7 @@ export CARVE_OVERRIDES=(
 # Hook: carve/transform.sh runs in the carve working dir each seed/sync.
 export CARVE_TRANSFORM="$MONO/carve/transform.sh"
 
-# docs/docs is currently UNTRACKED in the mono (staged on disk only); until it is
-# committed upstream, seed/sync source it from the working tree. Flip to 0 once
-# docs/docs is committed on $SRC_BRANCH so it flows through git history normally.
-export CARVE_DOCS_FROM_WORKTREE="${CARVE_DOCS_FROM_WORKTREE:-1}"
+# The docs corpus is committed on $SRC_BRANCH (flat under docs/ since the 0.12
+# docs sweep) and flows through git history normally; the worktree lay-in is
+# retired. Kept as an env escape hatch only.
+export CARVE_DOCS_FROM_WORKTREE="${CARVE_DOCS_FROM_WORKTREE:-0}"

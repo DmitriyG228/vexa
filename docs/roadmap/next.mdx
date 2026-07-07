@@ -1,0 +1,83 @@
+---
+title: "Where we go"
+description: "The committed near-term (0.12.1) and the 0.12.x direction — commitments and directions, labeled honestly."
+---
+
+Two tiers, kept honest: **committed** means the maintainer has ruled it and it has a target;
+**direction** means we know where we're heading but not when each piece lands. How we work while
+getting there is [Operating principles → How the project ships](/principles#how-the-project-ships);
+current proven state is
+[Status](/roadmap/status).
+
+## 0.12.1 — the fast-follow (committed, days not months)
+
+- **Speaker attribution on Teams and Zoom** — the known regression in 0.12.0
+  ([changelog](/changelog)): the capture kit's speaker binding is wired for Google Meet only, so
+  Teams/Zoom segments carry provisional `seg_N` labels. The detection machinery exists in the
+  meeting modules (previously proven) — this is integration, not research. Maintainer ruling:
+  ships next release, with a live verify pass per platform.
+- **Mount the transcript share surface** — `POST /transcripts/{platform}/{native}/share` +
+  `GET /public/transcripts/{share_id}.txt` are sealed in `api.v1` but not mounted in 0.12.0.
+  Visitor access via short-lived capability URLs; deliberately the
+  [stepping stone](/roadmap/multi-workspace#the-stepping-stone-visitor-transcript-access) to the
+  invite/membership flow.
+- **config.v1 probe follow-ups** — move live probes off the event loop; give lite its own
+  `model_inference` capability row.
+- **Capability-parity release check** — a release-pipeline leg that diffs the `/health`
+  capability rows across the compose/lite/helm validation stacks; any asymmetry fails the
+  release ([fix the class, not the instance](/principles#fix-the-class-not-the-instance)).
+
+- **Governed GitHub pull + auto-sync** — a *Pull from GitHub* workspace action: fast-forward
+  applies directly; a divergent remote is merged by the workspace agent as an attributed turn
+  (the agent is the merge policy — never force, never a silent overwrite). Opt-in auto-sync via
+  GitHub webhooks through the event ingress follows.
+- **Docs verification sealing** — extend the seal culture to the corpus, three tiers:
+  (1) *generate* the highest-drift references from their machine truths — the API reference
+  renders from the sealed `api.v1` OpenAPI, the configuration tables from the `config.v1`
+  declarations — generated pages cannot drift by construction; (2) *`gate:docs`* — both-ways
+  coverage and existence checks in the `gate:config-contract` style (every declared key/sealed
+  capability has a page; every key or endpoint mentioned in MDX exists in the declarations/sealed
+  spec; links and nav resolve), mutation-tested; (3) *source-coupled freshness seal* — each page
+  declares the tree paths it documents (`sources:` frontmatter) and the commit it was verified
+  against, recorded in `docs.seal.json`; the gate goes red when a page's sources change without
+  the page acknowledging it. Prose truthfulness (tier 4) is not gate-able: a scheduled
+  adversarial docs-review routine probes recently re-sealed pages against the tree. The 0.12.0
+  corpus (tree-verified at review time) is the sealing baseline.
+
+## The 0.12.x arc (committed features, sequencing open)
+
+- **Interactive bots** — in-meeting chat, screen share, avatar; the endpoints are contract-sealed
+  today, unmounted ([parity table](/changelog#not-yet-in-012)).
+- **`discord` ingest + participants endpoint** — return with the next `api.v1` contract
+  revision.
+- **Zoom authorized-join** — bring-your-own OBF/ZAK tokens and/or the native SDK path, restoring
+  parity with the 0.10 Zoom track (0.12.0 joins via the web client only).
+- **MCP behind the gateway** — one MCP server for all of Vexa's capabilities, mounted at the
+  gateway; the standalone port is interim ([MCP server](/api/mcp)).
+- **Community-issue triage** — the full community backlog is triaged post-release, verdict by
+  verdict, per the [community-steering policy](/principles#community-steering).
+
+- **Workspace graph view** — an Obsidian-style graph over the workspace's knowledge graph:
+  entities and documents as nodes, `[[wikilinks]]` and frontmatter relations as edges, rendered
+  live in the terminal's workspace surface. The data model already exists — the `kg/` subtree is
+  an OKF bundle of wiki-linked markdown entities — so this is a read-side visualization of what
+  every agent turn is already building. Click-through to the entity, filter by type, local graph
+  around the open document.
+- **Workspace views: rich apps inside the workspace** — a `view` becomes a first-class workspace
+  notion: a rich, interactive React app that lives *in* the workspace (as content, versioned with
+  it) and renders inside the terminal — dashboards over the knowledge graph, deal pipelines,
+  meeting review boards, anything the workspace's data can drive. Views are distributed and
+  shared the way workspace content is (git), and render inside a governed sandbox with a closed
+  component/capability registry — a view can read the workspace and invoke governed actions, never
+  arbitrary code with ambient authority. This is the presentation layer the
+  [multi-workspace direction](/roadmap/multi-workspace) implies: a shared meeting workspace whose
+  members see the same live views over the same data.
+
+## Direction: multi-workspace collaboration
+
+The accepted architecture — required per-user system workspaces, sharing as membership via
+scoped invite tokens, agent-mediated merge for ~20 concurrent participants on a live shared
+meeting workspace, humans-only attribution — is documented on its own page:
+[Multi-workspace direction](/roadmap/multi-workspace). Current storage shapes already honor its
+constraint (transcripts and processed views are addressable, multi-consumer artifacts). The
+design doc is chartered after v0.12.0; no shipping date is claimed.

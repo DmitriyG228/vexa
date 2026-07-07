@@ -1,0 +1,111 @@
+---
+title: "Vexa Lite"
+description: "The whole control plane in one container — the simplest supported way to self-host."
+---
+
+**Vexa Lite** packs the entire control plane into **one container**: gateway, admin-api,
+meeting-api, runtime, agent-api, dashboard, terminal, redis, and the X11/audio stack the bot
+browser needs. The runtime uses the **process backend** (`RUNTIME_BACKEND=process`): meeting bots
+and agent workers run as **child processes inside the container** — no Docker socket, no
+per-service containers. It is a supported deploy path alongside [Compose](/deployment) and
+[Helm](/deployment/helm), proven from the published images by the release validation matrix.
+
+## Quick start
+
+From the repo root:
+
+```bash
+make lite
+```
+
+This provisions PostgreSQL + MinIO sidecar containers, pulls the published `vexaai/vexa-lite`
+image (a local `vexa-lite:dev` build wins if present), starts everything, and probes the front
+doors. For transcripts, set `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN` in the
+repo-root `.env` first — see [Configuration → STT](/configuration#transcription-stt).
+
+When it finishes:
+
+| Front door | URL |
+|---|---|
+| Terminal (the [workbench](/clients/terminal)) | `http://YOUR_IP:3001` |
+| Dashboard | `http://YOUR_IP:3000` |
+| API (the gateway) | `http://YOUR_IP:8056` — docs at `/docs` |
+| Agent API | `http://YOUR_IP:8100` |
+
+Stop with `make lite-down` (data volumes are kept; `docker volume rm vexa-lite-pgdata
+vexa-lite-miniodata` wipes them).
+
+## What runs inside
+
+Supervised by `supervisord` in the one container:
+
+| Service | Port | Role |
+|---|---|---|
+| gateway | `8056` | the one front door — auth, scopes, routing, `/ws` fan-out |
+| admin-api | `8001` | users + API keys |
+| meeting-api | `8080` | bots, transcripts, recordings (→ MinIO) |
+| runtime | `8090` | spawns bot + agent workers as **child processes** |
+| agent-api | `8100` | agent control plane — dispatch, chat (SSE), routines |
+| dashboard | `3000` | Next.js web UI |
+| terminal | `3001` | the browser-CLI workbench |
+| redis | `6379` | bus + scheduler (internal) |
+| Xvfb · fluxbox · PulseAudio | `:99` | display + audio for the headful bot browser |
+| x11vnc · noVNC | `5900` / `6080` | watch the bot browser (debugging) |
+
+PostgreSQL and MinIO run as external sidecars (`vexa-lite-postgres`, `vexa-lite-minio`).
+
+## Configuration
+
+Lite reads the repo-root `.env` (seeded from `deploy/compose/.env` when present). The variables
+are the same as [Configuration](/configuration); the ones that matter most on lite:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN` | — | STT endpoint + key. Unset → capture-only bots. |
+| `ADMIN_TOKEN` | `changeme` | The stack's admin secret. Change it. |
+| `IMAGE_TAG` | `latest` | Which `vexaai/vexa-lite` tag to pull. |
+
+### Model credentials
+
+Everything is one container, so model credentials are **plain container env** — set them in the
+repo-root `.env` (or `-e` flags if you run the image by hand): `ANTHROPIC_API_KEY` or
+`ANTHROPIC_AUTH_TOKEN` (+ `ANTHROPIC_BASE_URL`), or a claude subscription OAuth token. Agent
+workers are child processes spawned through the in-image `vexa-agent-worker` launcher and inherit
+that environment. The full provider matrix is in
+[Configuration → Model inference](/configuration#model-inference--the-provider-matrix).
+
+### Worker output is captured
+
+Because process-backend workers aren't containers, there is no `docker logs` per worker. Each
+workload's stdout+stderr is captured to a per-workload log file under `PROCESS_LOG_DIR` (default
+`<tempdir>/vexa-workloads`), and on a nonzero worker exit the runtime logs the tail of that file
+at ERROR — a crashing dispatch is attributable from `docker logs vexa-lite`, not silent.
+
+<Note>
+Operator env **wins** over the image defaults for `BOT_COMMAND` / `AGENT_WORKER_COMMAND` — the
+launcher commands are entrypoint defaults, not hardcoded. You normally never touch these.
+</Note>
+
+## Debugging
+
+```bash
+docker logs -f vexa-lite                          # container logs (incl. worker crash tails)
+docker exec vexa-lite supervisorctl status        # all supervised services
+docker exec vexa-lite supervisorctl restart meeting-api
+docker exec vexa-lite ps aux | grep dist/index.js # running bot processes
+```
+
+Check capability state the same way as any target — the config.v1 rows on each service's
+`/health` (e.g. `curl -s localhost:8080/health | jq .capabilities`); see
+[Configuration → config contract](/configuration#the-config-contract-configv1).
+
+## Lite vs. Compose
+
+| | Lite | Compose |
+|---|---|---|
+| Bot / agent isolation | shared process space | separate containers |
+| Docker socket | not needed | required |
+| Datastores | postgres + minio sidecars | in-stack |
+| Setup | `make lite` | `make all` |
+
+Outgrow lite? Switch to [Compose](/deployment) — same images, same contracts.
